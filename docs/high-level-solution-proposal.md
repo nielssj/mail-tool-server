@@ -57,7 +57,7 @@ Set up TS project: `package.json`, `tsconfig.json`, ESLint/Prettier, `vitest` (o
 **Note:** wiring an actual vendor backend (e.g. Datadog) is left for a later task/config addition — Task 1 only needs the factory seam to exist. Marking the `ci.yaml` check as *required* for merge is a separate GitHub branch-protection setting (repo Settings → Branches), not a code change.
 
 ### Task 2 — Config schema + loader
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Implement `utils/config/schema.ts` (zod schema for account list, including a `dispatchers` array per account as a discriminated union on `type` — only `{ type: 'webhook', url }` defined for now) and `utils/config/load.ts` (resolves the config file path from the `CONFIG_PATH` env var, defaulting to `./config.json` at the project root when unset, reads and validates it, returns typed `AccountConfig[]`). Add `config.json` (and any `config*.json` local variants) to `.gitignore`, and commit a `config.example.json` showing the expected shape.
 **Acceptance criteria:** Unit tests cover: valid config parses correctly; missing required field throws a descriptive error; duplicate account `id`s rejected; file-not-found throws a clear error; unknown `dispatchers[].type` rejected with a descriptive error; account with an empty `dispatchers` array is valid (no dispatch configured); loader reads from the default `./config.json` path when `CONFIG_PATH` is unset, and from the given path when `CONFIG_PATH` is set. No IMAP or HTTP dependency — pure function tests.

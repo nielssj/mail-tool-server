@@ -5,21 +5,9 @@ export const WebhookDispatcherConfigSchema = z.object({
   url: z.string().url()
 });
 
-export const DispatcherConfigSchema = z
-  .object({
-    type: z.string()
-  })
-  .passthrough()
-  .superRefine((dispatcher, ctx) => {
-    if (dispatcher.type !== 'webhook') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['type'],
-        message: `Unknown dispatcher type: "${dispatcher.type}"`
-      });
-    }
-  })
-  .pipe(z.discriminatedUnion('type', [WebhookDispatcherConfigSchema]));
+export const DispatcherConfigSchema = z.discriminatedUnion('type', [
+  WebhookDispatcherConfigSchema
+]);
 
 export const AccountConfigSchema = z.object({
   id: z.string().min(1),
@@ -37,17 +25,17 @@ export const AccountConfigSchema = z.object({
 export const ConfigSchema = z
   .array(AccountConfigSchema)
   .superRefine((accounts, ctx) => {
+    const ids = accounts.map((a) => a.id);
     const seen = new Set<string>();
-    for (const [index, account] of accounts.entries()) {
-      if (seen.has(account.id)) {
+    for (const id of ids) {
+      if (seen.has(id)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: [index, 'id'],
-          message: `Duplicate account id: "${account.id}"`
+          message: `Duplicate account id: "${id}"`
         });
         return;
       }
-      seen.add(account.id);
+      seen.add(id);
     }
   });
 
