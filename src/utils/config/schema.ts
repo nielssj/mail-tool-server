@@ -39,6 +39,7 @@ export const ConfigSchema = z
     }
   });
 
+export type WebhookDispatcherConfig = z.infer<typeof WebhookDispatcherConfigSchema>;
 export type DispatcherConfig = z.infer<typeof DispatcherConfigSchema>;
 export type AccountConfig = z.infer<typeof AccountConfigSchema>;
 export type Config = z.infer<typeof ConfigSchema>;

@@ -81,7 +81,7 @@ Implement `utils/config/schema.ts` (zod schema for account list, including a `di
 **Acceptance criteria:** Unit tests simulate `exists`/`flags`/`expunge` events on a mocked connection and assert the watcher emits the correct domain event with correct payload; simulated disconnect triggers a reconnect attempt (mocked).
 
 ### Task 6 — Event dispatcher framework + webhook dispatcher
-**Status:** TODO
+**Status:** DONE
 **Description:**
 `events/dispatcher.ts`: `Dispatcher` interface (`handle(event: DomainEvent): Promise<void>`) plus `createDispatcher(dispatcherConfig)` factory that switches on `dispatcherConfig.type` and throws a descriptive error on an unrecognized type. A small wiring piece (e.g. in `server.ts` or a `dispatchers/index.ts`) subscribes each `AccountWatcher` to all `Dispatcher`s built from that account's `dispatchers` config array, and fans out every emitted event to each of them.
 `events/dispatchers/webhookDispatcher.ts`: the first `Dispatcher` implementation — POSTs a JSON payload (`event`, `accountId`, `mailbox`, `data`, `timestamp`) to the configured URL. Basic retry (e.g. 1 retry on failure) and error logging, no persistence of failed deliveries.
