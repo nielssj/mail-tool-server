@@ -50,7 +50,7 @@ src/
 ## Task Breakdown
 
 ### Task 1 — Project scaffolding + CI + logging
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Set up TS project: `package.json`, `tsconfig.json`, ESLint/Prettier, `vitest` (or `jest`), build/dev scripts, `fastify` + `imapflow` + `zod` + `pino` (+ `pino-pretty` as a dev dep) deps installed. Add `.github/workflows/ci.yaml`: triggers on `pull_request` (`opened`, `synchronize`, `reopened`), runs install → lint → build → test on Node LTS. Add `utils/logger.ts`: a `createLogger(config)` factory wrapping `pino`, defaulting to a human-readable `pino-pretty` transport when `NODE_ENV` is `development`/`test`, and structured JSON to stdout otherwise; wire it as the Fastify instance's logger so route logs flow through the same factory.
 **Acceptance criteria:** `npm run build` compiles with no errors; `npm test` runs and passes on a trivial placeholder test; `npm run dev` starts an empty Fastify server responding `200` on `GET /health`, logging human-readable lines to stdout; a unit test asserts `createLogger` produces structured JSON output when configured for a non-dev/test environment; opening a PR triggers the `ci.yaml` workflow and it passes on a clean checkout.
