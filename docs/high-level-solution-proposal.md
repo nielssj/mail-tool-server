@@ -75,7 +75,7 @@ Implement `utils/config/schema.ts` (zod schema for account list, including a `di
 **Acceptance criteria:** Each method has unit tests against a mocked `ImapFlow` client verifying correct imapflow calls (`list`, `fetch`, `messageMove`, `messageFlagsAdd/Remove`) and correct return shape; connection is opened and closed per call.
 
 ### Task 5 — IDLE watcher / event emitter
-**Status:** TODO
+**Status:** DONE
 **Description:**
 `imap/watcher.ts`: `AccountWatcher` class — one persistent connection per account, enters IDLE on configured mailboxes, tracks last-known message counts in memory, emits `newMail`, `flagsChanged`, `mailRemoved` events (typed, from `events/types.ts`). Includes basic reconnect-on-drop logic.
 **Acceptance criteria:** Unit tests simulate `exists`/`flags`/`expunge` events on a mocked connection and assert the watcher emits the correct domain event with correct payload; simulated disconnect triggers a reconnect attempt (mocked).
