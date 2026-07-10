@@ -18,21 +18,45 @@ const ACCOUNT = {
   dispatchers: []
 };
 
-describe('createConnectedImapClient', () => {
-  it('creates a client with account credentials, connects, and closes with logout', async () => {
-    const connect = vi.fn(async () => undefined);
-    const logout = vi.fn(async () => undefined);
-    const ctorSpy = vi.fn();
-    class MockImapClient {
-      constructor(options: unknown) {
+const prepareImapMock = ({
+  connectImpl = async () => undefined,
+  logoutImpl = async () => undefined,
+  withCtorSpy = false
+}: {
+  connectImpl?: () => Promise<void>;
+  logoutImpl?: () => Promise<void>;
+  withCtorSpy?: boolean;
+}) => {
+  const connect = vi.fn(connectImpl);
+  const logout = vi.fn(logoutImpl);
+  const ctorSpy = vi.fn();
+
+  class MockImapClient {
+    constructor(options: unknown) {
+      if (withCtorSpy) {
         ctorSpy(options);
       }
-      connect = connect;
-      logout = logout;
     }
+    connect = connect;
+    logout = logout;
+  }
+
+  return {
+    connect,
+    logout,
+    ctorSpy,
+    ImapClientCtor: MockImapClient as unknown as ImapClientConstructor
+  };
+};
+
+describe('createConnectedImapClient', () => {
+  it('creates a client with account credentials, connects, and closes with logout', async () => {
+    const { connect, logout, ctorSpy, ImapClientCtor } = prepareImapMock({
+      withCtorSpy: true
+    });
 
     const { close } = await createConnectedImapClient(ACCOUNT, {
-      ImapClientCtor: MockImapClient as unknown as ImapClientConstructor
+      ImapClientCtor
     });
 
     expect(ctorSpy).toHaveBeenCalledWith({
@@ -49,24 +73,21 @@ describe('createConnectedImapClient', () => {
 
   it('rethrows connect failures as ImapConnectionError', async () => {
     const connectFailure = new Error('socket timeout');
-    const connect = vi.fn(async () => {
-      throw connectFailure;
+    const { ImapClientCtor } = prepareImapMock({
+      connectImpl: async () => {
+        throw connectFailure;
+      }
     });
-    const logout = vi.fn(async () => undefined);
-    class MockImapClient {
-      connect = connect;
-      logout = logout;
-    }
 
     await expect(
       createConnectedImapClient(ACCOUNT, {
-        ImapClientCtor: MockImapClient as unknown as ImapClientConstructor
+        ImapClientCtor
       })
     ).rejects.toBeInstanceOf(ImapConnectionError);
 
     await expect(
       createConnectedImapClient(ACCOUNT, {
-        ImapClientCtor: MockImapClient as unknown as ImapClientConstructor
+        ImapClientCtor
       })
     ).rejects.toMatchObject({
       cause: connectFailure
@@ -74,17 +95,14 @@ describe('createConnectedImapClient', () => {
   });
 
   it('close helper does not throw when logout fails', async () => {
-    const connect = vi.fn(async () => undefined);
-    const logout = vi.fn(async () => {
-      throw new Error('logout failed');
+    const { logout, ImapClientCtor } = prepareImapMock({
+      logoutImpl: async () => {
+        throw new Error('logout failed');
+      }
     });
-    class MockImapClient {
-      connect = connect;
-      logout = logout;
-    }
 
     const { close } = await createConnectedImapClient(ACCOUNT, {
-      ImapClientCtor: MockImapClient as unknown as ImapClientConstructor
+      ImapClientCtor
     });
 
     await expect(close()).resolves.toBeUndefined();
