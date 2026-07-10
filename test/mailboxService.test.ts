@@ -1,0 +1,267 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  createMailboxService,
+  type MailboxClientConstructor
+} from '../src/services/mailboxService.js';
+import { ImapConnectionError } from '../src/imap/clientFactory.js';
+import type { ListResponse, FetchMessageObject } from 'imapflow';
+
+const ACCOUNT = {
+  id: 'acc-1',
+  host: 'imap.example.com',
+  port: 993,
+  secure: true,
+  auth: { user: 'user@example.com', pass: 'secret' },
+  watchMailboxes: ['INBOX'],
+  dispatchers: []
+};
+
+const ACCOUNTS = [ACCOUNT];
+
+const makeListResponse = (path: string): ListResponse => ({
+  path,
+  pathAsListed: path,
+  name: path.split('/').pop() ?? path,
+  delimiter: '/',
+  parent: [],
+  parentPath: '',
+  flags: new Set(),
+  listed: true,
+  subscribed: false
+});
+
+const makeFetchMessage = (uid: number): FetchMessageObject => ({
+  seq: uid,
+  uid,
+  flags: new Set(['\\Seen']),
+  envelope: {
+    subject: `Subject ${uid}`,
+    from: [{ address: 'sender@example.com' }]
+  },
+  internalDate: new Date('2024-01-01'),
+  size: 1024
+});
+
+type MockClientOverrides = Partial<{
+  list: () => Promise<ListResponse[]>;
+  mailboxOpen: () => Promise<object>;
+  fetchAll: () => Promise<FetchMessageObject[]>;
+  fetchOne: () => Promise<FetchMessageObject | false>;
+  messageMove: () => Promise<object | false>;
+  messageFlagsAdd: () => Promise<boolean>;
+  messageFlagsRemove: () => Promise<boolean>;
+  connect: () => Promise<void>;
+  logout: () => Promise<void>;
+}>;
+
+const buildMockCtor = (overrides: MockClientOverrides = {}) => {
+  const connect = vi.fn(overrides.connect ?? (() => Promise.resolve()));
+  const logout = vi.fn(overrides.logout ?? (() => Promise.resolve()));
+  const list = vi.fn(overrides.list ?? (() => Promise.resolve([])));
+  const mailboxOpen = vi.fn(
+    overrides.mailboxOpen ?? (() => Promise.resolve({}))
+  );
+  const fetchAll = vi.fn(overrides.fetchAll ?? (() => Promise.resolve([])));
+  const fetchOne = vi.fn(
+    overrides.fetchOne ?? (() => Promise.resolve(false as const))
+  );
+  const messageMove = vi.fn(
+    overrides.messageMove ?? (() => Promise.resolve(false as const))
+  );
+  const messageFlagsAdd = vi.fn(
+    overrides.messageFlagsAdd ?? (() => Promise.resolve(true))
+  );
+  const messageFlagsRemove = vi.fn(
+    overrides.messageFlagsRemove ?? (() => Promise.resolve(true))
+  );
+
+  class MockMailboxClient {
+    connect = connect;
+    logout = logout;
+    list = list;
+    mailboxOpen = mailboxOpen;
+    fetchAll = fetchAll;
+    fetchOne = fetchOne;
+    messageMove = messageMove;
+    messageFlagsAdd = messageFlagsAdd;
+    messageFlagsRemove = messageFlagsRemove;
+  }
+
+  const ctor = MockMailboxClient as unknown as MailboxClientConstructor;
+
+  return { ctor, connect, logout, list, mailboxOpen, fetchAll, fetchOne, messageMove, messageFlagsAdd, messageFlagsRemove };
+};
+
+describe('createMailboxService', () => {
+  describe('listMailboxes', () => {
+    it('connects, calls list(), then logs out', async () => {
+      const mailboxes = [makeListResponse('INBOX'), makeListResponse('Sent')];
+      const { ctor, connect, logout, list } = buildMockCtor({
+        list: () => Promise.resolve(mailboxes)
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.listMailboxes('acc-1');
+
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(mailboxes);
+    });
+
+    it('throws for unknown accountId', async () => {
+      const { ctor } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await expect(service.listMailboxes('no-such-account')).rejects.toThrow(
+        /Unknown account id/
+      );
+    });
+
+    it('wraps connection errors as ImapConnectionError', async () => {
+      const { ctor } = buildMockCtor({
+        connect: () => Promise.reject(new Error('socket timeout'))
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await expect(service.listMailboxes('acc-1')).rejects.toBeInstanceOf(
+        ImapConnectionError
+      );
+    });
+
+    it('closes connection even when list() throws', async () => {
+      const { ctor, logout } = buildMockCtor({
+        list: () => Promise.reject(new Error('list failed'))
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await expect(service.listMailboxes('acc-1')).rejects.toThrow('list failed');
+      expect(logout).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('listMessages', () => {
+    it('opens mailbox, fetches all messages, then logs out', async () => {
+      const messages = [makeFetchMessage(1), makeFetchMessage(2)];
+      const { ctor, connect, logout, mailboxOpen, fetchAll } = buildMockCtor({
+        fetchAll: () => Promise.resolve(messages)
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.listMessages('acc-1', 'INBOX');
+
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
+      expect(fetchAll).toHaveBeenCalledWith(
+        '1:*',
+        expect.objectContaining({ uid: true }),
+        { uid: true }
+      );
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(messages);
+    });
+
+    it('uses sinceUid range when provided', async () => {
+      const { ctor, fetchAll } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await service.listMessages('acc-1', 'INBOX', { sinceUid: 42 });
+      expect(fetchAll).toHaveBeenCalledWith('42:*', expect.anything(), { uid: true });
+    });
+
+    it('applies limit by returning the last N messages', async () => {
+      const messages = [1, 2, 3, 4, 5].map(makeFetchMessage);
+      const { ctor } = buildMockCtor({
+        fetchAll: () => Promise.resolve(messages)
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.listMessages('acc-1', 'INBOX', { limit: 3 });
+      expect(result).toHaveLength(3);
+      expect(result).toEqual(messages.slice(-3));
+    });
+
+    it('returns all messages when count is within limit', async () => {
+      const messages = [makeFetchMessage(1), makeFetchMessage(2)];
+      const { ctor } = buildMockCtor({
+        fetchAll: () => Promise.resolve(messages)
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.listMessages('acc-1', 'INBOX', { limit: 10 });
+      expect(result).toHaveLength(2);
+    });
+  });
+
+  describe('getMessage', () => {
+    it('opens mailbox, fetches one message by UID, then logs out', async () => {
+      const message = makeFetchMessage(7);
+      const { ctor, connect, logout, mailboxOpen, fetchOne } = buildMockCtor({
+        fetchOne: () => Promise.resolve(message)
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 7);
+
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
+      expect(fetchOne).toHaveBeenCalledWith('7', expect.objectContaining({ uid: true }), { uid: true });
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(message);
+    });
+
+    it('returns false when UID does not exist', async () => {
+      const { ctor } = buildMockCtor({
+        fetchOne: () => Promise.resolve(false)
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 99);
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('moveMessage', () => {
+    it('opens mailbox, moves message by UID, then logs out', async () => {
+      const copyResponse = { uidValidity: BigInt(1), uid: 10, destination: 'Archive' };
+      const { ctor, connect, logout, mailboxOpen, messageMove } = buildMockCtor({
+        messageMove: () => Promise.resolve(copyResponse)
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.moveMessage('acc-1', 'INBOX', 5, 'Archive');
+
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
+      expect(messageMove).toHaveBeenCalledWith('5', 'Archive', { uid: true });
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(copyResponse);
+    });
+  });
+
+  describe('setFlags', () => {
+    it('opens mailbox, adds flags, removes flags, then logs out', async () => {
+      const { ctor, connect, logout, mailboxOpen, messageFlagsAdd, messageFlagsRemove } = buildMockCtor();
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await service.setFlags('acc-1', 'INBOX', 3, ['\\Flagged'], ['\\Seen']);
+
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
+      expect(messageFlagsAdd).toHaveBeenCalledWith('3', ['\\Flagged'], { uid: true });
+      expect(messageFlagsRemove).toHaveBeenCalledWith('3', ['\\Seen'], { uid: true });
+      expect(logout).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips messageFlagsAdd when add list is empty', async () => {
+      const { ctor, messageFlagsAdd, messageFlagsRemove } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await service.setFlags('acc-1', 'INBOX', 3, [], ['\\Seen']);
+      expect(messageFlagsAdd).not.toHaveBeenCalled();
+      expect(messageFlagsRemove).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips messageFlagsRemove when remove list is empty', async () => {
+      const { ctor, messageFlagsAdd, messageFlagsRemove } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await service.setFlags('acc-1', 'INBOX', 3, ['\\Flagged'], []);
+      expect(messageFlagsAdd).toHaveBeenCalledTimes(1);
+      expect(messageFlagsRemove).not.toHaveBeenCalled();
+    });
+  });
+});
