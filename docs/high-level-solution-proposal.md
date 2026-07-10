@@ -88,7 +88,7 @@ Implement `utils/config/schema.ts` (zod schema for account list, including a `di
 **Acceptance criteria:** Unit tests for the factory: each supported `type` instantiates the matching implementation; an unrecognized `type` throws a descriptive error. Unit tests for `webhookDispatcher`: mock the HTTP client (e.g. `undici`/`fetch`), assert correct payload shape and URL per event type, and assert retry-once behavior on a simulated failure. One test registers a second, in-test stub `Dispatcher` type to prove the watcher/fan-out wiring is agnostic to dispatcher implementation (no changes needed outside the factory to add a type).
 
 ### Task 7 — App bootstrap & lifecycle
-**Status:** TODO
+**Status:** DONE
 **Description:**
 `app.ts` builds the Fastify instance (routes + plugins) without binding a port, for testability. `server.ts` wires config → watchers → dispatcher → app → `listen()`, plus graceful shutdown (close IDLE connections, stop watchers on SIGINT/SIGTERM).
 **Acceptance criteria:** `buildApp(config)` returns a working Fastify instance testable via `inject()` with no real network calls; shutdown handler closes all watcher connections (verified via mock).
