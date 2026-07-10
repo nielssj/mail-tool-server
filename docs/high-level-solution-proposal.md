@@ -63,7 +63,7 @@ Implement `utils/config/schema.ts` (zod schema for account list, including a `di
 **Acceptance criteria:** Unit tests cover: valid config parses correctly; missing required field throws a descriptive error; duplicate account `id`s rejected; file-not-found throws a clear error; unknown `dispatchers[].type` rejected with a descriptive error; account with an empty `dispatchers` array is valid (no dispatch configured); loader reads from the default `./config.json` path when `CONFIG_PATH` is unset, and from the given path when `CONFIG_PATH` is set. No IMAP or HTTP dependency — pure function tests.
 
 ### Task 3 — IMAP client factory
-**Status:** TODO
+**Status:** DONE
 **Description:**
 `imap/clientFactory.ts`: given an `AccountConfig`, returns a connected `ImapFlow` instance (opened, logged in), and a helper to safely close it. Constructor is injectable for testing.
 **Acceptance criteria:** Unit tests mock `ImapFlow` and assert `connect()`/`logout()` are called with correct credentials; connection errors are caught and rethrown as a typed `ImapConnectionError`.
