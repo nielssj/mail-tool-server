@@ -69,7 +69,7 @@ Implement `utils/config/schema.ts` (zod schema for account list, including a `di
 **Acceptance criteria:** Unit tests mock `ImapFlow` and assert `connect()`/`logout()` are called with correct credentials; connection errors are caught and rethrown as a typed `ImapConnectionError`.
 
 ### Task 4 — Mailbox service (core IMAP operations)
-**Status:** TODO
+**Status:** DONE
 **Description:**
 `services/mailboxService.ts` built on the client factory: `listMailboxes(accountId)`, `listMessages(accountId, mailbox, { limit, sinceUid })`, `getMessage(accountId, mailbox, uid)`, `moveMessage(...)`, `setFlags(...)`.
 **Acceptance criteria:** Each method has unit tests against a mocked `ImapFlow` client verifying correct imapflow calls (`list`, `fetch`, `messageMove`, `messageFlagsAdd/Remove`) and correct return shape; connection is opened and closed per call.
