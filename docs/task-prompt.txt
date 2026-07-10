@@ -1,0 +1,5 @@
+Implement the next task (first from the top not Status = DONE) within docs/high-leve-solution-proposal.md.
+
+Commit and push, confirm CI checks pass. Run checks locally before you commit and push, if you can.
+
+Await my approval before you proceed to next task.
