@@ -16,14 +16,17 @@ const VALID_ACCOUNT = {
 
 let tmpDir: string;
 let tmpConfigPath: string;
+let originalCwd: string;
 
 beforeEach(() => {
+  originalCwd = process.cwd();
   tmpDir = join(tmpdir(), `mail-tool-test-${process.pid}-${Date.now()}`);
   mkdirSync(tmpDir, { recursive: true });
   tmpConfigPath = join(tmpDir, 'config.json');
 });
 
 afterEach(() => {
+  process.chdir(originalCwd);
   rmSync(tmpDir, { recursive: true, force: true });
   delete process.env.CONFIG_PATH;
 });
@@ -103,11 +106,18 @@ describe('loadConfig', () => {
     ]);
     expect(() => loadConfig(tmpConfigPath)).toThrowError(ConfigLoadError);
     expect(() => loadConfig(tmpConfigPath)).toThrowError(
-      /Config validation failed/
+      /Unknown dispatcher type: "unknown-type"/
     );
   });
 
-  it('reads from the default CONFIG_PATH env var when set', () => {
+  it('reads from the default ./config.json path when CONFIG_PATH is unset', () => {
+    writeConfig([VALID_ACCOUNT]);
+    process.chdir(tmpDir);
+    const result = loadConfig();
+    expect(result[0].id).toBe('test-account');
+  });
+
+  it('reads from CONFIG_PATH when set', () => {
     writeConfig([VALID_ACCOUNT]);
     process.env.CONFIG_PATH = tmpConfigPath;
     const result = loadConfig();
