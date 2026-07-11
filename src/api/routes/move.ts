@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { MailboxService } from '../../services/mailboxService.js';
-import { isResourceNotFoundError, sendNotFound } from './shared.js';
+import { NotFoundError } from './shared.js';
 
 type MoveRoute = {
   Params: {
@@ -40,33 +40,21 @@ export const registerMoveRoutes = <TApp extends FastifyInstance<any, any, any, a
           type: 'object',
           required: ['ok'],
           properties: { ok: { type: 'boolean' } }
-        },
-        404: {
-          type: 'object',
-          required: ['error'],
-          properties: { error: { type: 'string' } }
         }
       }
     }
-  }, async (request, reply) => {
-    try {
-      const moved = await mailboxService.moveMessage(
-        request.params.accountId,
-        request.params.mailbox,
-        request.params.uid,
-        request.body.destination
-      );
+  }, async (request) => {
+    const moved = await mailboxService.moveMessage(
+      request.params.accountId,
+      request.params.mailbox,
+      request.params.uid,
+      request.body.destination
+    );
 
-      if (!moved) {
-        return sendNotFound(reply, 'Message not found');
-      }
-
-      return { ok: true };
-    } catch (error) {
-      if (isResourceNotFoundError(error)) {
-        return sendNotFound(reply, (error as Error).message);
-      }
-      throw error;
+    if (!moved) {
+      throw new NotFoundError('Message not found');
     }
+
+    return { ok: true };
   });
 };

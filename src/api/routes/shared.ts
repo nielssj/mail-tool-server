@@ -1,4 +1,9 @@
-import type { FastifyReply } from 'fastify';
+export class NotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotFoundError';
+  }
+}
 
 export const isResourceNotFoundError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
@@ -9,6 +14,3 @@ export const isResourceNotFoundError = (error: unknown): boolean => {
     error.message
   );
 };
-
-export const sendNotFound = (reply: FastifyReply, message: string) =>
-  reply.code(404).send({ error: message });
