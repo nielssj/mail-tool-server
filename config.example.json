@@ -1,0 +1,19 @@
+[
+  {
+    "id": "personal",
+    "host": "imap.example.com",
+    "port": 993,
+    "secure": true,
+    "auth": {
+      "user": "you@example.com",
+      "pass": "your-app-password"
+    },
+    "watchMailboxes": ["INBOX"],
+    "dispatchers": [
+      {
+        "type": "webhook",
+        "url": "https://your-app.example.com/hooks/mail"
+      }
+    ]
+  }
+]

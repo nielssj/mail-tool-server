@@ -20,7 +20,7 @@ const start = async (): Promise<void> => {
     subscribeWatcher(watcher, dispatchers);
   }
 
-  const app = buildApp({ watchers, mailboxService });
+  const app = await buildApp({ watchers, mailboxService });
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`Received ${signal}, shutting down...`);

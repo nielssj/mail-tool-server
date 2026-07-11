@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import type { MailboxService } from '../../services/mailboxService.js';
-import { isResourceNotFoundError, sendNotFound } from './shared.js';
 
 type SetFlagsRoute = {
   Params: {
@@ -48,32 +47,20 @@ export const registerFlagsRoutes = <TApp extends FastifyInstance<any, any, any, 
           type: 'object',
           required: ['ok'],
           properties: { ok: { type: 'boolean' } }
-        },
-        404: {
-          type: 'object',
-          required: ['error'],
-          properties: { error: { type: 'string' } }
         }
       }
     }
-  }, async (request, reply) => {
+  }, async (request) => {
     const add = request.body.add ?? [];
     const remove = request.body.remove ?? [];
 
-    try {
-      await mailboxService.setFlags(
-        request.params.accountId,
-        request.params.mailbox,
-        request.params.uid,
-        add,
-        remove
-      );
-      return { ok: true };
-    } catch (error) {
-      if (isResourceNotFoundError(error)) {
-        return sendNotFound(reply, (error as Error).message);
-      }
-      throw error;
-    }
+    await mailboxService.setFlags(
+      request.params.accountId,
+      request.params.mailbox,
+      request.params.uid,
+      add,
+      remove
+    );
+    return { ok: true };
   });
 };

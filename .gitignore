@@ -5,3 +5,5 @@ dist/
 coverage/
 config.json
 config.*.json
+# ...but the committed example is safe to track (holds no real credentials).
+!config.example.json

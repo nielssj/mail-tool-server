@@ -61,10 +61,10 @@ const createMailboxServiceMock = (): MailboxService => {
 
 describe('API routes', () => {
   const mailboxService = createMailboxServiceMock();
-  let app: ReturnType<typeof buildApp>;
+  let app: Awaited<ReturnType<typeof buildApp>>;
 
-  beforeAll(() => {
-    app = buildApp({
+  beforeAll(async () => {
+    app = await buildApp({
       loggerConfig: { env: 'test', level: 'silent' },
       mailboxService
     });

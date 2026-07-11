@@ -100,19 +100,19 @@ Route files under `api/routes/`: mailboxes, messages (list/get), move, flags. Fa
 **Acceptance criteria:** Each route tested via `fastify.inject()` against a mocked `mailboxService`; covers happy path, 404 for unknown account/mailbox, 400 for invalid input.
 
 ### Task 9 — OpenAPI + docs page
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Register `@fastify/swagger` and `@fastify/swagger-ui`; ensure route schemas produce a coherent `openapi.json`.
 **Acceptance criteria:** `GET /openapi.json` returns valid OpenAPI 3 document listing all routes; `GET /docs` serves the Swagger UI page; verified with a snapshot or schema-validation test.
 
 ### Task 10 — Error handling
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Central Fastify error handler producing a consistent error JSON shape (`{ error: { message, code } }`), mapping `ImapConnectionError` and validation errors to appropriate HTTP status codes.
 **Acceptance criteria:** Unit tests trigger each error type through a route and assert status code + body shape.
 
 ### Task 11 — Integration test against a real IMAP server
-**Status:** TODO
+**Status:** DONE
 **Description:**
 End-to-end integration test that exercises the stack against a **real IMAP server** — no IMAP mocking — using [GreenMail](https://greenmail-mail-test.github.io/greenmail/) (`greenmail/standalone` image, in-memory SMTP+IMAP) managed by [`testcontainers`](https://node.testcontainers.org/). The container is started per test run, its mapped IMAP/SMTP ports are read back (no fixed ports, no DNS/MX involved — everything is a direct `localhost:<mappedPort>` connection), and torn down after.
 
@@ -128,7 +128,7 @@ The test builds an `AccountConfig` pointing at the container, seeds a mailbox (v
 **Note:** Keep the container image tag pinned (not `:latest`) for reproducibility. If GreenMail's feature set ever proves limiting, `docker-mailserver` (real Postfix/Dovecot) is a heavier drop-in alternative behind the same testcontainers seam.
 
 ### Task 12 — README / docs
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Document config file format, how to run, endpoint list, webhook payload shapes, and the known limitation on "moved mail" detection.
 **Acceptance criteria:** A new developer can configure one test account and run the server using only the README.

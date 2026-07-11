@@ -22,6 +22,14 @@ type MailboxOpenResult = {
   exists?: number;
 };
 
+// imapflow emits `exists` as an object ({ path, count, prevCount }). Older
+// callers/mocks may emit the bare count as a number, so accept both shapes.
+type ExistsUpdate = {
+  path?: string;
+  count: number;
+  prevCount?: number;
+};
+
 type FlagsUpdate = {
   uid: number;
   flags?: Iterable<string>;
@@ -34,7 +42,7 @@ type ExpungeUpdate = {
 
 type WatcherClientEvents = {
   close: () => void;
-  exists: (count: number) => void;
+  exists: (update: ExistsUpdate | number) => void;
   flags: (update: FlagsUpdate) => void;
   expunge: (update: ExpungeUpdate) => void;
 };
@@ -289,12 +297,13 @@ export class AccountWatcher extends EventEmitter {
       });
   }
 
-  private handleExists = (count: number): void => {
+  private handleExists = (update: ExistsUpdate | number): void => {
     const mailbox = this.activeMailbox;
     if (!mailbox) {
       return;
     }
 
+    const count = typeof update === 'number' ? update : update.count;
     const previousCount = this.mailboxCounts.get(mailbox) ?? 0;
     this.mailboxCounts.set(mailbox, count);
 
