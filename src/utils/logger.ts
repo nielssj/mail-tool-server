@@ -10,8 +10,9 @@ export const createLogger = (
   destination?: DestinationStream
 ): Logger => {
   const env = config.env ?? process.env.NODE_ENV ?? 'development';
+  const defaultLevel = env === 'test' ? 'silent' : 'info';
   const options: LoggerOptions = {
-    level: config.level ?? process.env.LOG_LEVEL ?? 'info'
+    level: config.level ?? process.env.LOG_LEVEL ?? defaultLevel
   };
 
   if (env === 'development' || env === 'test') {
