@@ -11,7 +11,7 @@ describe('createLogger', () => {
       output += chunk.toString();
     });
 
-    const logger = createLogger({ env: 'production' }, destination);
+    const logger = createLogger({ env: 'production', level: 'info' }, destination);
 
     logger.info({ accountId: 'acc-1' }, 'log-test');
 
