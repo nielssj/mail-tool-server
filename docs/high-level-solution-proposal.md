@@ -94,7 +94,7 @@ Implement `utils/config/schema.ts` (zod schema for account list, including a `di
 **Acceptance criteria:** `buildApp(config)` returns a working Fastify instance testable via `inject()` with no real network calls; shutdown handler closes all watcher connections (verified via mock).
 
 ### Task 8 — HTTP routes for IMAP operations
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Route files under `api/routes/`: mailboxes, messages (list/get), move, flags. Fastify JSON schemas defined per route for request/response (also feeds OpenAPI generation).
 **Acceptance criteria:** Each route tested via `fastify.inject()` against a mocked `mailboxService`; covers happy path, 404 for unknown account/mailbox, 400 for invalid input.
