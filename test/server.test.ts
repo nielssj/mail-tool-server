@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import type { AccountWatcher } from '../src/imap/watcher.js';
 
@@ -10,7 +10,11 @@ const makeWatcher = () =>
 
 describe('buildApp', () => {
   describe('with no watchers', () => {
-    const app = buildApp({ loggerConfig: { env: 'test' } });
+    let app: Awaited<ReturnType<typeof buildApp>>;
+
+    beforeEach(async () => {
+      app = await buildApp({ loggerConfig: { env: 'test' } });
+    });
 
     afterEach(async () => {
       await app.close();
@@ -29,7 +33,7 @@ describe('buildApp', () => {
       const watcher1 = makeWatcher();
       const watcher2 = makeWatcher();
 
-      const app = buildApp({
+      const app = await buildApp({
         loggerConfig: { env: 'test' },
         watchers: [watcher1, watcher2]
       });
@@ -41,7 +45,7 @@ describe('buildApp', () => {
     });
 
     it('does not throw when no watchers are provided', async () => {
-      const app = buildApp({ loggerConfig: { env: 'test' } });
+      const app = await buildApp({ loggerConfig: { env: 'test' } });
 
       await expect(app.close()).resolves.toBeUndefined();
     });

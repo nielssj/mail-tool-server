@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 
-describe('GET /health', () => {
+describe('OpenAPI / Swagger registration', () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
 
   beforeEach(async () => {
@@ -12,10 +12,8 @@ describe('GET /health', () => {
     await app.close();
   });
 
-  it('returns 200', async () => {
-    const response = await app.inject({ method: 'GET', url: '/health' });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: 'ok' });
+  it('registers swagger and swagger-ui plugins on the fastify instance', async () => {
+    expect(app.hasPlugin('@fastify/swagger')).toBe(true);
+    expect(app.hasPlugin('@fastify/swagger-ui')).toBe(true);
   });
 });

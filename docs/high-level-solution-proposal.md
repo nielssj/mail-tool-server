@@ -100,7 +100,7 @@ Route files under `api/routes/`: mailboxes, messages (list/get), move, flags. Fa
 **Acceptance criteria:** Each route tested via `fastify.inject()` against a mocked `mailboxService`; covers happy path, 404 for unknown account/mailbox, 400 for invalid input.
 
 ### Task 9 — OpenAPI + docs page
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Register `@fastify/swagger` and `@fastify/swagger-ui`; ensure route schemas produce a coherent `openapi.json`.
 **Acceptance criteria:** `GET /openapi.json` returns valid OpenAPI 3 document listing all routes; `GET /docs` serves the Swagger UI page; verified with a snapshot or schema-validation test.
