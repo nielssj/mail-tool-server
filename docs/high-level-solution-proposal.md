@@ -128,7 +128,7 @@ The test builds an `AccountConfig` pointing at the container, seeds a mailbox (v
 **Note:** Keep the container image tag pinned (not `:latest`) for reproducibility. If GreenMail's feature set ever proves limiting, `docker-mailserver` (real Postfix/Dovecot) is a heavier drop-in alternative behind the same testcontainers seam.
 
 ### Task 12 — README / docs
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Document config file format, how to run, endpoint list, webhook payload shapes, and the known limitation on "moved mail" detection.
 **Acceptance criteria:** A new developer can configure one test account and run the server using only the README.
