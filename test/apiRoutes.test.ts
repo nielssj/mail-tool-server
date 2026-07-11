@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
+import { isResourceNotFoundError } from '../src/api/routes/shared.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
 import type {
   CopyResponseObject,
@@ -243,6 +244,23 @@ describe('API routes', () => {
         payload: { add: [''] }
       });
       expect(response.statusCode).toBe(400);
+    });
+  });
+
+  describe('isResourceNotFoundError', () => {
+    it('returns true for unknown account errors', () => {
+      expect(isResourceNotFoundError(new Error('Unknown account id: "missing"'))).toBe(
+        true
+      );
+    });
+
+    it('returns true for mailbox missing errors', () => {
+      expect(isResourceNotFoundError(new Error('No such mailbox'))).toBe(true);
+    });
+
+    it('returns false for non-resource errors and non-Error values', () => {
+      expect(isResourceNotFoundError(new Error('Connection reset by peer'))).toBe(false);
+      expect(isResourceNotFoundError('Unknown mailbox')).toBe(false);
     });
   });
 });
