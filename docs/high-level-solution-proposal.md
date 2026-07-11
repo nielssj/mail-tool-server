@@ -111,11 +111,21 @@ Register `@fastify/swagger` and `@fastify/swagger-ui`; ensure route schemas prod
 Central Fastify error handler producing a consistent error JSON shape (`{ error: { message, code } }`), mapping `ImapConnectionError` and validation errors to appropriate HTTP status codes.
 **Acceptance criteria:** Unit tests trigger each error type through a route and assert status code + body shape.
 
-### Task 11 — Integration smoke test
+### Task 11 — Integration test against a real IMAP server
 **Status:** TODO
 **Description:**
-One test that boots `buildApp()` with a fully mocked IMAP layer and exercises a full flow: list mailboxes → list messages → flag a message → assert webhook dispatcher would have been invoked (via a stub watcher event).
-**Acceptance criteria:** Passes in CI with zero real network/IMAP access.
+End-to-end integration test that exercises the stack against a **real IMAP server** — no IMAP mocking — using [GreenMail](https://greenmail-mail-test.github.io/greenmail/) (`greenmail/standalone` image, in-memory SMTP+IMAP) managed by [`testcontainers`](https://node.testcontainers.org/). The container is started per test run, its mapped IMAP/SMTP ports are read back (no fixed ports, no DNS/MX involved — everything is a direct `localhost:<mappedPort>` connection), and torn down after.
+
+The test builds an `AccountConfig` pointing at the container, seeds a mailbox (via IMAP `APPEND` through a throwaway `imapflow` client, or SMTP submission to the container), then drives the real flow: boot `buildApp()` + start a real `AccountWatcher`, then `inject()` list mailboxes → list messages → get message → flag → move, asserting real IMAP results at each step. The watcher's real IDLE `exists`/`flags`/`expunge` events are wired to a webhook dispatcher whose URL points at a small in-test HTTP server that captures the POST; the test asserts the expected webhook payload is received (this is the part a mocked IMAP layer can never actually validate).
+
+**Isolation from the unit suite (so it's easy to skip/disable):**
+- Integration tests live under `test/integration/**` and are **excluded** from the default `vitest.config.ts` `include`/via `exclude`, so `npm test` never touches Docker.
+- A dedicated `vitest.integration.config.ts` includes only `test/integration/**/*.test.ts` (longer `testTimeout`/`hookTimeout` for container startup).
+- New scripts: `"test:integration": "vitest run --config vitest.integration.config.ts"` (and optionally `"test:all"` running both). Add `testcontainers` as a devDependency.
+- CI runs it as a **separate, independently-disableable job** in `ci.yaml` (not a step in `checks`), e.g. `integration:` running `npm run test:integration`. GitHub-hosted `ubuntu-latest` runners have Docker available, so no extra service setup is needed. The job is guarded so it can be turned off in one line later if it becomes a burden (e.g. `if: vars.RUN_INTEGRATION != 'false'`, or a `workflow_dispatch`/label gate) — the fast `checks` job stays the required status check for merge.
+
+**Acceptance criteria:** `npm test` (unit suite) runs with zero Docker/network dependency and never starts a container. `npm run test:integration` starts GreenMail, seeds mail, and passes the full list → get → flag → move flow plus the webhook-received assertion against the real server, then cleans up the container. The integration CI job passes on a clean checkout and can be disabled without touching the unit `checks` job.
+**Note:** Keep the container image tag pinned (not `:latest`) for reproducibility. If GreenMail's feature set ever proves limiting, `docker-mailserver` (real Postfix/Dovecot) is a heavier drop-in alternative behind the same testcontainers seam.
 
 ### Task 12 — README / docs
 **Status:** TODO
