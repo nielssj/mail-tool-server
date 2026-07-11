@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { isResourceNotFoundError } from '../src/api/routes/shared.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
@@ -63,12 +63,18 @@ describe('API routes', () => {
   const mailboxService = createMailboxServiceMock();
   let app: ReturnType<typeof buildApp>;
 
-  beforeEach(() => {
-    app = buildApp({ loggerConfig: { env: 'test' }, mailboxService });
+  beforeAll(() => {
+    app = buildApp({
+      loggerConfig: { env: 'test', level: 'silent' },
+      mailboxService
+    });
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterAll(async () => {
     await app.close();
   });
 

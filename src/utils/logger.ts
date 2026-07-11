@@ -14,7 +14,7 @@ export const createLogger = (
     level: config.level ?? process.env.LOG_LEVEL ?? 'info'
   };
 
-  if (env === 'development' || env === 'test') {
+  if (options.level !== 'silent' && (env === 'development' || env === 'test')) {
     options.transport = {
       target: 'pino-pretty',
       options: {
