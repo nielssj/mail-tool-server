@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { loadConfig } from './utils/config/load.js';
 import { AccountWatcher } from './imap/watcher.js';
 import { createDispatcher, subscribeWatcher } from './events/dispatcher.js';
+import { createMailboxService } from './services/mailboxService.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3000);
@@ -10,6 +11,7 @@ const start = async (): Promise<void> => {
   const config = loadConfig();
 
   const watchers = config.map((account) => new AccountWatcher(account));
+  const mailboxService = createMailboxService(config);
 
   for (let i = 0; i < config.length; i++) {
     const account = config[i]!;
@@ -18,7 +20,7 @@ const start = async (): Promise<void> => {
     subscribeWatcher(watcher, dispatchers);
   }
 
-  const app = buildApp({ watchers });
+  const app = buildApp({ watchers, mailboxService });
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`Received ${signal}, shutting down...`);

@@ -61,6 +61,33 @@ export type MailboxServiceOptions = {
   MailboxClientCtor?: MailboxClientConstructor;
 };
 
+export type MailboxService = {
+  listMailboxes: (accountId: string) => Promise<ListResponse[]>;
+  listMessages: (
+    accountId: string,
+    mailbox: string,
+    opts?: ListMessagesOptions
+  ) => Promise<FetchMessageObject[]>;
+  getMessage: (
+    accountId: string,
+    mailbox: string,
+    uid: number
+  ) => Promise<FetchMessageObject | false>;
+  moveMessage: (
+    accountId: string,
+    mailbox: string,
+    uid: number,
+    destination: string
+  ) => Promise<CopyResponseObject | false>;
+  setFlags: (
+    accountId: string,
+    mailbox: string,
+    uid: number,
+    add: string[],
+    remove: string[]
+  ) => Promise<void>;
+};
+
 const FETCH_QUERY: FetchQueryObject = {
   uid: true,
   flags: true,
@@ -116,7 +143,7 @@ const findAccount = (
 export const createMailboxService = (
   accounts: AccountConfig[],
   options: MailboxServiceOptions = {}
-) => {
+): MailboxService => {
   const ctor =
     options.MailboxClientCtor ?? (ImapFlow as unknown as MailboxClientConstructor);
 

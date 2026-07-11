@@ -1,10 +1,13 @@
 import Fastify from 'fastify';
 import { createLogger, type LoggerConfig } from './utils/logger.js';
 import type { AccountWatcher } from './imap/watcher.js';
+import type { MailboxService } from './services/mailboxService.js';
+import { registerApiRoutes } from './api/plugin.js';
 
 export type BuildAppOptions = {
   loggerConfig?: LoggerConfig;
   watchers?: AccountWatcher[];
+  mailboxService?: MailboxService;
 };
 
 export const buildApp = (options: BuildAppOptions = {}) => {
@@ -20,6 +23,10 @@ export const buildApp = (options: BuildAppOptions = {}) => {
   }
 
   app.get('/health', async () => ({ status: 'ok' }));
+
+  if (options.mailboxService) {
+    registerApiRoutes(app, options.mailboxService);
+  }
 
   return app;
 };
