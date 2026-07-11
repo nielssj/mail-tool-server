@@ -19,6 +19,7 @@ import type { DomainEvent } from '../../src/events/types.js';
 // Pinned tag (not :latest) for reproducibility — see task note.
 const GREENMAIL_IMAGE = 'greenmail/standalone:2.1.0';
 const GREENMAIL_IMAP_PORT = 3143;
+const GREENMAIL_API_PORT = 8080;
 const USER = 'alice@example.com';
 const PASS = 'password';
 
@@ -122,17 +123,36 @@ describe('integration: real IMAP flow against GreenMail', () => {
 
   beforeAll(async () => {
     container = await new GenericContainer(GREENMAIL_IMAGE)
-      // auth.disabled lets us log in / auto-provision users without pre-seeding.
       .withEnvironment({
         GREENMAIL_OPTS:
-          '-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled'
+          '-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0'
       })
-      .withExposedPorts(GREENMAIL_IMAP_PORT)
-      .withWaitStrategy(Wait.forListeningPorts())
+      .withExposedPorts(GREENMAIL_IMAP_PORT, GREENMAIL_API_PORT)
+      // GreenMail's standalone REST API exposes a readiness probe — a more
+      // reliable signal than a raw port check that the server can serve.
+      .withWaitStrategy(
+        Wait.forHttp('/api/service/readiness', GREENMAIL_API_PORT).forStatusCode(
+          200
+        )
+      )
       .start();
 
     host = container.getHost();
     port = container.getMappedPort(GREENMAIL_IMAP_PORT);
+
+    // GreenMail does not auto-provision IMAP users; create the account via the
+    // standalone REST API before any IMAP login.
+    const apiPort = container.getMappedPort(GREENMAIL_API_PORT);
+    const createUserRes = await fetch(`http://${host}:${apiPort}/api/user`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: USER, login: USER, password: PASS })
+    });
+    if (!createUserRes.ok && createUserRes.status !== 409) {
+      throw new Error(
+        `Failed to provision GreenMail user: HTTP ${createUserRes.status} ${await createUserRes.text()}`
+      );
+    }
 
     // Start the webhook receiver.
     webhookServer = http.createServer((req, res) => {
