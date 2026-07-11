@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import type { MailboxService } from '../../services/mailboxService.js';
-import { isResourceNotFoundError, sendNotFound } from './shared.js';
 
 type MailboxParams = {
   Params: {
@@ -25,22 +24,10 @@ export const registerMailboxRoutes = <TApp extends FastifyInstance<any, any, any
         200: {
           type: 'array',
           items: { type: 'object', additionalProperties: true }
-        },
-        404: {
-          type: 'object',
-          required: ['error'],
-          properties: { error: { type: 'string' } }
         }
       }
     }
-  }, async (request, reply) => {
-    try {
-      return await mailboxService.listMailboxes(request.params.accountId);
-    } catch (error) {
-      if (isResourceNotFoundError(error)) {
-        return sendNotFound(reply, (error as Error).message);
-      }
-      throw error;
-    }
+  }, async (request) => {
+    return mailboxService.listMailboxes(request.params.accountId);
   });
 };

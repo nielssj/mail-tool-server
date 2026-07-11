@@ -5,6 +5,7 @@ import { createLogger, type LoggerConfig } from './utils/logger.js';
 import type { AccountWatcher } from './imap/watcher.js';
 import type { MailboxService } from './services/mailboxService.js';
 import { registerApiRoutes } from './api/plugin.js';
+import { errorHandler } from './api/errorHandler.js';
 
 export type BuildAppOptions = {
   loggerConfig?: LoggerConfig;
@@ -16,6 +17,8 @@ export const buildApp = async (options: BuildAppOptions = {}) => {
   const app = Fastify({
     loggerInstance: createLogger(options.loggerConfig)
   });
+
+  app.setErrorHandler(errorHandler);
 
   await app.register(swagger, {
     openapi: {

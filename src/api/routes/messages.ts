@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { MailboxService } from '../../services/mailboxService.js';
-import { isResourceNotFoundError, sendNotFound } from './shared.js';
+import { NotFoundError } from './shared.js';
 
 type ListMessagesRoute = {
   Params: {
@@ -46,27 +46,15 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
         200: {
           type: 'array',
           items: { type: 'object', additionalProperties: true }
-        },
-        404: {
-          type: 'object',
-          required: ['error'],
-          properties: { error: { type: 'string' } }
         }
       }
     }
-  }, async (request, reply) => {
-    try {
-      return await mailboxService.listMessages(
-        request.params.accountId,
-        request.params.mailbox,
-        request.query
-      );
-    } catch (error) {
-      if (isResourceNotFoundError(error)) {
-        return sendNotFound(reply, (error as Error).message);
-      }
-      throw error;
-    }
+  }, async (request) => {
+    return mailboxService.listMessages(
+      request.params.accountId,
+      request.params.mailbox,
+      request.query
+    );
   });
 
   app.get<GetMessageRoute>('/accounts/:accountId/mailboxes/:mailbox/messages/:uid', {
@@ -81,30 +69,18 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
         }
       },
       response: {
-        200: { type: 'object', additionalProperties: true },
-        404: {
-          type: 'object',
-          required: ['error'],
-          properties: { error: { type: 'string' } }
-        }
+        200: { type: 'object', additionalProperties: true }
       }
     }
-  }, async (request, reply) => {
-    try {
-      const message = await mailboxService.getMessage(
-        request.params.accountId,
-        request.params.mailbox,
-        request.params.uid
-      );
-      if (!message) {
-        return sendNotFound(reply, 'Message not found');
-      }
-      return message;
-    } catch (error) {
-      if (isResourceNotFoundError(error)) {
-        return sendNotFound(reply, (error as Error).message);
-      }
-      throw error;
+  }, async (request) => {
+    const message = await mailboxService.getMessage(
+      request.params.accountId,
+      request.params.mailbox,
+      request.params.uid
+    );
+    if (!message) {
+      throw new NotFoundError('Message not found');
     }
+    return message;
   });
 };

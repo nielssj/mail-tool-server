@@ -106,7 +106,7 @@ Register `@fastify/swagger` and `@fastify/swagger-ui`; ensure route schemas prod
 **Acceptance criteria:** `GET /openapi.json` returns valid OpenAPI 3 document listing all routes; `GET /docs` serves the Swagger UI page; verified with a snapshot or schema-validation test.
 
 ### Task 10 — Error handling
-**Status:** TODO
+**Status:** DONE
 **Description:**
 Central Fastify error handler producing a consistent error JSON shape (`{ error: { message, code } }`), mapping `ImapConnectionError` and validation errors to appropriate HTTP status codes.
 **Acceptance criteria:** Unit tests trigger each error type through a route and assert status code + body shape.
