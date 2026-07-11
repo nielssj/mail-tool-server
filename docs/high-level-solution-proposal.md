@@ -112,7 +112,7 @@ Central Fastify error handler producing a consistent error JSON shape (`{ error:
 **Acceptance criteria:** Unit tests trigger each error type through a route and assert status code + body shape.
 
 ### Task 11 — Integration test against a real IMAP server
-**Status:** TODO
+**Status:** DONE
 **Description:**
 End-to-end integration test that exercises the stack against a **real IMAP server** — no IMAP mocking — using [GreenMail](https://greenmail-mail-test.github.io/greenmail/) (`greenmail/standalone` image, in-memory SMTP+IMAP) managed by [`testcontainers`](https://node.testcontainers.org/). The container is started per test run, its mapped IMAP/SMTP ports are read back (no fixed ports, no DNS/MX involved — everything is a direct `localhost:<mappedPort>` connection), and torn down after.
 
