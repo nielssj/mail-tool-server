@@ -29,3 +29,27 @@ jobs:
 
       - name: Test
         run: npm test
+
+  # Integration tests run a real IMAP server (GreenMail) in Docker via
+  # testcontainers. Kept as a separate, independently-disableable job so the
+  # fast `checks` job stays the required status check for merge. Turn off by
+  # setting the repository variable RUN_INTEGRATION to 'false'.
+  integration:
+    runs-on: ubuntu-latest
+    if: ${{ vars.RUN_INTEGRATION != 'false' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Integration tests
+        run: npm run test:integration
