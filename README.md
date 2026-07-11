@@ -108,47 +108,11 @@ connections gracefully before exiting.
 
 ## HTTP API
 
-All operation routes are scoped to an account by its configured `id`. Path
-segments are URL-encoded, so mailbox names containing `/` should be encoded
-(e.g. `Archive%2F2024`).
-
-| Method & path                                                        | Description                                    |
-| -------------------------------------------------------------------- | ---------------------------------------------- |
-| `GET /health`                                                        | Liveness check → `{ "status": "ok" }`.         |
-| `GET /docs`                                                          | Swagger UI.                                    |
-| `GET /openapi.json`                                                  | OpenAPI 3 document for all routes.             |
-| `GET /accounts/:accountId/mailboxes`                                 | List mailboxes/folders for the account.        |
-| `GET /accounts/:accountId/mailboxes/:mailbox/messages`              | List messages in a mailbox. Query: `limit` (max returned, most recent), `sinceUid` (only UIDs ≥ this). |
-| `GET /accounts/:accountId/mailboxes/:mailbox/messages/:uid`        | Fetch a single message by UID.                 |
-| `POST /accounts/:accountId/mailboxes/:mailbox/messages/:uid/move`  | Move a message. Body: `{ "destination": "Archive" }` → `{ "ok": true }`. |
-| `POST /accounts/:accountId/mailboxes/:mailbox/messages/:uid/flags` | Add/remove flags. Body: `{ "add": ["\\Seen"], "remove": ["\\Flagged"] }` → `{ "ok": true }`. |
-
-### Error responses
-
-Errors use a consistent shape:
-
-```json
-{ "error": { "message": "Message not found", "code": "NOT_FOUND" } }
-```
-
-| HTTP status | `code`                   | When                                             |
-| ----------- | ------------------------ | ------------------------------------------------ |
-| 400         | `VALIDATION_ERROR`       | Request failed schema validation.                |
-| 404         | `NOT_FOUND`              | Unknown account/mailbox, or message not found.   |
-| 503         | `IMAP_CONNECTION_ERROR`  | Could not connect to the upstream IMAP server.   |
-| 500         | `INTERNAL_ERROR`         | Unexpected server error.                          |
-
-### Example
-
-```bash
-# List mailboxes for the "personal" account
-curl http://localhost:3000/accounts/personal/mailboxes
-
-# Flag message UID 42 in INBOX as seen
-curl -X POST http://localhost:3000/accounts/personal/mailboxes/INBOX/messages/42/flags \
-  -H 'Content-Type: application/json' \
-  -d '{"add":["\\Seen"]}'
-```
+Start the server and open the interactive Swagger UI at
+<http://localhost:3000/docs> to browse every route, its request/response
+schema, and try calls live. The raw OpenAPI 3 document is served at
+<http://localhost:3000/openapi.json>. A liveness check is available at
+`GET /health`.
 
 ## Webhook events
 
