@@ -34,6 +34,45 @@ const rawMessage = (subject: string, body: string): string =>
     ``
   ].join('\r\n');
 
+const describeError = (error: unknown): string => {
+  if (error && typeof error === 'object') {
+    const e = error as {
+      message?: string;
+      executedCommand?: string;
+      responseStatus?: string;
+      responseText?: string;
+    };
+    return [
+      e.message ?? String(error),
+      e.executedCommand ? `cmd=${e.executedCommand}` : undefined,
+      e.responseStatus ? `status=${e.responseStatus}` : undefined,
+      e.responseText ? `text=${e.responseText}` : undefined
+    ]
+      .filter(Boolean)
+      .join(' | ');
+  }
+  return String(error);
+};
+
+const dumpContainerLogs = async (
+  target: StartedTestContainer
+): Promise<void> => {
+  try {
+    const stream = await target.logs();
+    const chunks: string[] = [];
+    await new Promise<void>((resolve) => {
+      const done = () => resolve();
+      stream.on('data', (chunk) => chunks.push(chunk.toString()));
+      stream.on('end', done);
+      stream.on('err', done);
+      setTimeout(done, 3_000);
+    });
+    console.error('--- GreenMail container logs ---\n' + chunks.join(''));
+  } catch {
+    // Best-effort diagnostics only.
+  }
+};
+
 const makeAccount = (host: string, port: number): AccountConfig => ({
   id: 'it-account',
   host,
@@ -124,6 +163,15 @@ describe('integration: real IMAP flow against GreenMail', () => {
   });
 
   it('drives list → get → flag → move and receives a real IDLE webhook', async () => {
+    try {
+      await runFlow();
+    } catch (error) {
+      await dumpContainerLogs(container);
+      throw new Error(describeError(error), { cause: error });
+    }
+  });
+
+  const runFlow = async (): Promise<void> => {
     // Seed: create the destination mailbox and append one initial message,
     // via a throwaway imapflow client (real IMAP APPEND, no mocking).
     const seed = await connectClient(host, port);
@@ -227,5 +275,5 @@ describe('integration: real IMAP flow against GreenMail', () => {
     } finally {
       await app.close();
     }
-  });
+  };
 });
