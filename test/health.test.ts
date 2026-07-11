@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 
 describe('GET /health', () => {
-  const app = buildApp({ loggerConfig: { env: 'test' } });
+  let app: Awaited<ReturnType<typeof buildApp>>;
+
+  beforeEach(async () => {
+    app = await buildApp({ loggerConfig: { env: 'test' } });
+  });
 
   afterEach(async () => {
     await app.close();
