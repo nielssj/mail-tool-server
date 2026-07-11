@@ -66,14 +66,15 @@ tool-call traces.
   `listMessages` and `getMessage` share a `FETCH_QUERY` that fetches only
   envelope metadata (`uid, flags, envelope, internalDate, size`) — **no body**.
   Message retrieval is extended at the service level (so the HTTP API benefits
-  too and IMAP stays in one place) to fetch the text body (prefer `text/plain`;
-  downconvert `text/html` to text), the raw source, and attachment **metadata**
-  (filename, mime type, size, part id) — never attachment bytes inline.
+  too and IMAP stays in one place) to fetch the body (prefer the `text/plain`
+  part; otherwise return the raw body content as-is — no HTML-to-text rendering),
+  the raw source, and attachment **metadata** (filename, mime type, size, part
+  id) — never attachment bytes inline.
 
 - **`get_message` returns a bounded body; overflow goes out-of-band.**
-  `get_message` returns the text body only **up to a strict character cap** (e.g.
-  ~8–16 KB, configurable). When the body exceeds the cap, the response is
-  truncated at the limit with an explicit marker and a hint that names
+  `get_message` returns the body text only **up to a strict cap of 8000
+  characters** (configurable). When the body exceeds the cap, the response is
+  truncated at 8000 characters with an explicit marker and a hint that names
   `export_message` as the way to retrieve the full content. This guarantees a
   bounded, predictable context cost for the common read while never leaving the
   agent stranded without the rest. Attachment metadata is always included; bytes
@@ -109,16 +110,14 @@ tool-call traces.
   actionable message (`Unknown account "x"`, `Could not connect to IMAP …`),
   rather than leaking stack traces. Same taxonomy as the HTTP error handler.
 
-- **Transport: stdio first, Streamable HTTP later.** `createMcpServer` is
-  transport-agnostic. v1 ships a **stdio** entrypoint (`mcp-server.ts`) — the
-  common case for local agents and trivial to configure in Claude Desktop /
-  Claude Code. A later task can mount the SDK's **Streamable HTTP** transport on
-  the existing Fastify app for remote/multi-client use, behind bearer-token auth.
+- **Transport: stdio.** `createMcpServer` is transport-agnostic, but this plan
+  ships a single **stdio** entrypoint (`mcp-server.ts`). Additional transports
+  can be added later without touching tool code.
 
-- **Trust boundary is explicit.** The MCP server hands an agent full read/write
-  access to real mailboxes using the credentials in `config.json`. v1 assumes a
-  trusted local agent over stdio. Any networked (HTTP) transport is gated on
-  authentication and is called out as its own task, not bundled into v1.
+- **Authentication is out of scope for the app.** The MCP server hands an agent
+  full read/write access to real mailboxes using the credentials in
+  `config.json`. Network-level authentication is terminated by external
+  infrastructure at deploy time, so the application itself implements no auth.
 
 - **Testability mirrors the repo.** Tools are unit-tested against a mocked
   `mailboxService` (as the HTTP routes are), and an in-process integration test
@@ -161,19 +160,20 @@ error (not a thrown exception).
 ### Task 3 — Message tools: `list_messages` + `get_message` (bounded body)
 **Status:** TODO
 **Description:** Close the body-fetch gap at the service level — extend message
-retrieval to fetch the decoded text body (prefer `text/plain`, downconvert
-`text/html`), the raw source, and attachment metadata (filename, mime type,
-size, part id). Implement `format.ts` compact summaries for `list_messages`
-(uid, subject, from, date, flags, snippet) with default/max `limit` and
-`sinceUid` paging. `get_message` returns the body text truncated to a strict,
-configurable character cap; when the source body exceeds the cap it emits a
-truncation marker plus a hint naming `export_message` for the full content, and
-lists attachment metadata (never bytes).
+retrieval to fetch the body (prefer the `text/plain` part; otherwise return the
+raw body as-is, no HTML-to-text rendering), the raw source, and attachment
+metadata (filename, mime type, size, part id). Implement `format.ts` compact
+summaries for `list_messages` (uid, subject, from, date, flags, snippet) with
+default/max `limit` and `sinceUid` paging. `get_message` returns the body text
+truncated to a strict cap of **8000 characters** (configurable); when the source
+body exceeds the cap it emits a truncation marker plus a hint naming
+`export_message` for the full content, and lists attachment metadata (never
+bytes).
 **Acceptance criteria:** `list_messages` returns compact summaries (no body) and
-respects limit/pagination; `get_message` returns body text capped at the
-configured limit, and when the underlying body exceeds it the response is
-truncated with the `export_message` hint; attachment metadata present, no bytes;
-missing uid → tool error. HTTP API behavior verified unchanged (or intentionally
+respects limit/pagination; `get_message` returns body text capped at 8000
+characters, and when the underlying body exceeds it the response is truncated
+with the `export_message` hint; attachment metadata present, no bytes; missing
+uid → tool error. HTTP API behavior verified unchanged (or intentionally
 extended) by its existing suite. (The `export_message` hint target lands in
 Task 4.)
 
@@ -212,38 +212,27 @@ every tool returns both `structuredContent` (typed) and a concise `text` summary
 connection error, unexpected error) through a tool and assert `isError` + a clear
 message and stable shape; no stack traces leak to the client.
 
-### Task 7 — (Optional) Streamable HTTP transport + auth
-**Status:** TODO
-**Description:** Mount the SDK's Streamable HTTP transport on the existing
-Fastify app at an `/mcp` endpoint, guarded by a bearer token from config/env,
-reusing the same `createMcpServer`. Keep stdio as the default entrypoint.
-**Acceptance criteria:** An MCP client can connect over HTTP and call a tool;
-requests without a valid token are rejected; the stdio path is unaffected.
-
-### Task 8 — Docs
+### Task 7 — Docs
 **Status:** TODO
 **Description:** Document the MCP server in the README (and/or a dedicated doc):
-how to run it, an example Claude Desktop / Claude Code client config, the tool
-list with parameters, and the trust-boundary note.
+how to run it, an example Claude Desktop / Claude Code client config, and the
+tool list with parameters.
 **Acceptance criteria:** A developer can connect an MCP client to the server and
 successfully call the tools using only the docs.
 
 ---
 
-### Open questions / decisions to confirm
+### Resolved decisions
 
-1. **Inline body cap** — what character limit does `get_message` enforce before
-   truncating to `export_message` (e.g. ~8 KB vs ~16 KB)? Recommendation: start
-   conservative and make it configurable.
+1. **Inline body cap** — `get_message` truncates the body at **8000 characters**
+   (configurable), then points to `export_message`.
 2. **Object-storage staging** — stage a fresh blob per `get_attachment` /
-   `export_message` call vs. cache/dedupe by message+part; and the pre-signed URL
-   TTL and cleanup policy for staged blobs. Recommendation: stage-per-call with a
-   short TTL and lifecycle-based expiry, revisit caching if it proves needed.
-3. **HTML handling** — `get_message` downconverts `text/html` to plain text;
-   `export_message` delivers raw RFC822. Confirm whether a rendered-text export
-   variant is also wanted, or raw source is sufficient.
-4. **Transport for v1** — stdio only (recommended), or ship Streamable HTTP in
-   the first pass? Recommendation: stdio first; HTTP as Task 7.
-5. **Resources** — additionally expose mailboxes/messages as MCP *resources*
-   (URI-addressable) later, or keep everything as tools? Recommendation: tools
-   only for v1; revisit resources once real agent usage informs the need.
+   `export_message` call, with a short pre-signed-URL TTL and lifecycle-based
+   expiry for cleanup. Revisit caching only if it proves needed.
+3. **Body/export format** — **raw is preferred**: `get_message` returns the
+   `text/plain` part (or raw body as-is, no HTML rendering), and `export_message`
+   delivers raw RFC822. No rendered-text export variant.
+4. **Transport** — **stdio only** for now.
+5. **Tools vs resources** — **tools only**; no MCP resources for now.
+6. **Authentication** — handled by external infrastructure at deploy time; the
+   application implements no auth.
