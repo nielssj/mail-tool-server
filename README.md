@@ -54,6 +54,7 @@ The file is a JSON **object** with an `accounts` array and an optional
 | `auth.pass`      | string     | Login password (or app password).                                           |
 | `watchMailboxes` | string[]   | Mailboxes to watch for events over IDLE (e.g. `["INBOX"]`). May be empty to disable watching. |
 | `dispatchers`    | object[]   | Event dispatchers this account fans events out to. May be empty. See below. |
+| `readOnly`       | boolean    | Optional, defaults to `false`. When `true`, the mutating operations (`move_message`/`set_flags` MCP tools, and the equivalent HTTP `POST .../move` and `POST .../flags` routes) are rejected with a clear error instead of executing. Read operations (list/get) are unaffected. |
 
 ### Dispatchers
 

@@ -64,7 +64,9 @@ describe('createMcpHttpServer', () => {
       'get_message',
       'list_accounts',
       'list_mailboxes',
-      'list_messages'
+      'list_messages',
+      'move_message',
+      'set_flags'
     ]);
   });
 

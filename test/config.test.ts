@@ -184,4 +184,44 @@ describe('loadConfig', () => {
       );
     });
   });
+
+  describe('readOnly', () => {
+    it('is undefined when omitted', () => {
+      writeConfig({ accounts: [VALID_ACCOUNT] });
+      const result = loadConfig(tmpConfigPath);
+      expect(result.accounts[0]!.readOnly).toBeUndefined();
+    });
+
+    it('parses an explicit true', () => {
+      writeConfig({ accounts: [{ ...VALID_ACCOUNT, readOnly: true }] });
+      const result = loadConfig(tmpConfigPath);
+      expect(result.accounts[0]!.readOnly).toBe(true);
+    });
+
+    it('parses an explicit false', () => {
+      writeConfig({ accounts: [{ ...VALID_ACCOUNT, readOnly: false }] });
+      const result = loadConfig(tmpConfigPath);
+      expect(result.accounts[0]!.readOnly).toBe(false);
+    });
+
+    it('is set independently per account', () => {
+      writeConfig({
+        accounts: [
+          { ...VALID_ACCOUNT, readOnly: true },
+          { ...VALID_ACCOUNT, id: 'second-account', readOnly: false }
+        ]
+      });
+      const result = loadConfig(tmpConfigPath);
+      expect(result.accounts[0]!.readOnly).toBe(true);
+      expect(result.accounts[1]!.readOnly).toBe(false);
+    });
+
+    it('throws for a non-boolean value', () => {
+      writeConfig({ accounts: [{ ...VALID_ACCOUNT, readOnly: 'yes' }] });
+      expect(() => loadConfig(tmpConfigPath)).toThrowError(ConfigLoadError);
+      expect(() => loadConfig(tmpConfigPath)).toThrowError(
+        /Config validation failed/
+      );
+    });
+  });
 });

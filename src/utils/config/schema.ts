@@ -19,7 +19,11 @@ export const AccountConfigSchema = z.object({
     pass: z.string().min(1)
   }),
   watchMailboxes: z.array(z.string().min(1)),
-  dispatchers: z.array(DispatcherConfigSchema)
+  dispatchers: z.array(DispatcherConfigSchema),
+  /** When true, mailboxService rejects moveMessage/setFlags for this
+   * account with a clear error instead of executing them — protects
+   * accounts an operator wants agents/API callers to only ever read from. */
+  readOnly: z.boolean().optional()
 });
 
 const AccountListSchema = z.array(AccountConfigSchema).superRefine((accounts, ctx) => {

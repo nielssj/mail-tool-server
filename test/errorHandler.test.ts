@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { ImapConnectionError } from '../src/imap/clientFactory.js';
+import { ReadOnlyAccountError } from '../src/services/mailboxService.js';
 import { NotFoundError } from '../src/api/routes/shared.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
 
@@ -91,6 +92,24 @@ describe('central error handler', () => {
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({
       error: { message: 'Message not found', code: 'NOT_FOUND' }
+    });
+  });
+
+  it('maps ReadOnlyAccountError to 403 with READ_ONLY_ACCOUNT code', async () => {
+    vi.mocked(mailboxService.moveMessage).mockRejectedValueOnce(
+      new ReadOnlyAccountError('acc-1', 'move_message')
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: '/accounts/acc-1/mailboxes/INBOX/messages/1/move',
+      payload: { destination: 'Archive' }
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: {
+        message: 'Account "acc-1" is read-only; move_message is disabled.',
+        code: 'READ_ONLY_ACCOUNT'
+      }
     });
   });
 

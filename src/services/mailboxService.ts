@@ -13,6 +13,13 @@ import { ImapConnectionError } from '../imap/clientFactory.js';
 
 export type { ListResponse, FetchMessageObject };
 
+export class ReadOnlyAccountError extends Error {
+  constructor(accountId: string, operation: string) {
+    super(`Account "${accountId}" is read-only; ${operation} is disabled.`);
+    this.name = 'ReadOnlyAccountError';
+  }
+}
+
 export type MessageAttachment = {
   partId: string;
   filename?: string;
@@ -440,6 +447,9 @@ export const createMailboxService = (
     destination: string
   ): Promise<CopyResponseObject | false> => {
     const account = findAccount(accounts, accountId);
+    if (account.readOnly) {
+      throw new ReadOnlyAccountError(accountId, 'move_message');
+    }
     return withClient(account, ctor, async (client) => {
       await client.mailboxOpen(mailbox);
       return client.messageMove(String(uid), destination, { uid: true });
@@ -454,6 +464,9 @@ export const createMailboxService = (
     remove: string[]
   ): Promise<void> => {
     const account = findAccount(accounts, accountId);
+    if (account.readOnly) {
+      throw new ReadOnlyAccountError(accountId, 'set_flags');
+    }
     return withClient(account, ctor, async (client) => {
       await client.mailboxOpen(mailbox);
       if (add.length > 0) {
