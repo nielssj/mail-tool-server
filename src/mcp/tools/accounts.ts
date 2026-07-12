@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../../services/mailboxService.js';
 import type { AccountConfig } from '../../utils/config/schema.js';
+import { withToolErrors } from '../errors.js';
 
 export type AccountToolsOptions = {
   mailboxService: MailboxService;
@@ -36,7 +37,7 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
       outputSchema: { accounts: z.array(AccountSummarySchema) },
       annotations: { readOnlyHint: true }
     },
-    async () => {
+    withToolErrors(async () => {
       const accounts = options.accounts.map((account) => ({
         id: account.id,
         host: account.host,
@@ -44,10 +45,10 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
       }));
 
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify(accounts) }],
+        content: [{ type: 'text' as const, text: `Found ${accounts.length} account(s).` }],
         structuredContent: { accounts }
       };
-    }
+    })
   );
 
   server.registerTool(
@@ -59,7 +60,7 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
       outputSchema: { mailboxes: z.array(MailboxSummarySchema) },
       annotations: { readOnlyHint: true }
     },
-    async ({ accountId }) => {
+    withToolErrors(async ({ accountId }: { accountId: string }) => {
       const list = await options.mailboxService.listMailboxes(accountId);
       const mailboxes = list.map((mailbox) => ({
         path: mailbox.path,
@@ -70,9 +71,14 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
       }));
 
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify(mailboxes) }],
+        content: [
+          {
+            type: 'text' as const,
+            text: `Found ${mailboxes.length} mailbox(es) in account "${accountId}".`
+          }
+        ],
         structuredContent: { mailboxes }
       };
-    }
+    })
   );
 };

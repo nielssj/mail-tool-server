@@ -242,10 +242,25 @@ unknown-mailbox / not-found conditions, plus the read-only guard (rejects
 without connecting, for both tools, for both the MCP and HTTP surfaces).
 
 ### Task 6 — Error mapping + structured-output polish
-**Status:** TODO
+**Status:** DONE
 **Description:** Centralize service-error → MCP-tool-error mapping in
-`errors.ts`, reusing `isResourceNotFoundError` and `ImapConnectionError`. Ensure
-every tool returns both `structuredContent` (typed) and a concise `text` summary.
+`errors.ts`, reusing `isResourceNotFoundError` and `ImapConnectionError` (also
+reuses `NotFoundError` directly — Tasks 3-5's ad hoc "not found" throws are now
+`NotFoundError` instead of plain `Error`, so they map the same way the HTTP
+API's own `NOT_FOUND` case does). `withToolErrors` wraps every tool handler;
+on a thrown error it returns `{ isError: true, content, structuredContent:
+{ error: { code, message } } }` instead of the SDK's default text-only error
+result — this is what makes error responses carry a stable, typed
+`structuredContent` without failing the tool's declared success
+`outputSchema` (the SDK skips output validation whenever `isError` is true).
+Two more classes added for full coverage: `ObjectStorageNotConfiguredError`
+(get_attachment/export_message without `objectStorage` configured) and
+`ReadOnlyAccountError` (from Task 5) both get their own codes.
+Unrecognized/unexpected errors collapse to a generic `INTERNAL_ERROR`
+message, mirroring `api/errorHandler.ts`'s 500 case — never the original
+message or stack trace. Every tool's success `content` is also now a
+concise, tool-specific sentence instead of a raw `JSON.stringify(result)`
+dump.
 **Acceptance criteria:** Tests trigger each error class (unknown account/mailbox,
 connection error, unexpected error) through a tool and assert `isError` + a clear
 message and stable shape; no stack traces leak to the client.
