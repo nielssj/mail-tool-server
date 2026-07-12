@@ -365,6 +365,114 @@ describe('createMailboxService', () => {
     });
   });
 
+  describe('getAttachment', () => {
+    const bodyStructure: MessageStructureObject = {
+      type: 'multipart/mixed',
+      childNodes: [
+        { part: '1', type: 'text/plain', size: 20 },
+        {
+          part: '2',
+          type: 'application/pdf',
+          size: 5000,
+          disposition: 'attachment',
+          dispositionParameters: { filename: 'invoice.pdf' }
+        }
+      ]
+    };
+
+    it('downloads the requested part and returns its decoded content + metadata', async () => {
+      const pdfBytes = Buffer.from('%PDF-1.4 fake bytes');
+      const { ctor, mailboxOpen, fetchOne, download } = buildMockCtor({
+        fetchOne: () => Promise.resolve({ ...makeFetchMessage(1), bodyStructure }),
+        download: () =>
+          Promise.resolve({
+            meta: { contentType: 'application/pdf', filename: 'invoice.pdf' },
+            content: Readable.from([pdfBytes])
+          })
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getAttachment('acc-1', 'INBOX', 1, '2');
+
+      expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
+      expect(fetchOne).toHaveBeenCalledWith(
+        '1',
+        expect.objectContaining({ bodyStructure: true }),
+        { uid: true }
+      );
+      expect(download).toHaveBeenCalledWith('1', '2', { uid: true });
+      expect(result).toEqual({
+        filename: 'invoice.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: pdfBytes.length,
+        content: pdfBytes
+      });
+    });
+
+    it('falls back to bodyStructure metadata when download() does not supply it', async () => {
+      const pdfBytes = Buffer.from('%PDF-1.4 fake bytes');
+      const { ctor } = buildMockCtor({
+        fetchOne: () => Promise.resolve({ ...makeFetchMessage(1), bodyStructure }),
+        download: () =>
+          Promise.resolve({ meta: { contentType: '' }, content: Readable.from([pdfBytes]) })
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getAttachment('acc-1', 'INBOX', 1, '2');
+
+      expect(result).toMatchObject({ filename: 'invoice.pdf', mimeType: 'application/pdf' });
+    });
+
+    it('returns false when the message does not exist', async () => {
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () => Promise.resolve(false)
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getAttachment('acc-1', 'INBOX', 999, '2');
+
+      expect(result).toBe(false);
+      expect(download).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the part id does not exist on the message', async () => {
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () => Promise.resolve({ ...makeFetchMessage(1), bodyStructure })
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getAttachment('acc-1', 'INBOX', 1, '99');
+
+      expect(result).toBe(false);
+      expect(download).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getRawSource', () => {
+    it('fetches the message with source: true and returns the raw buffer', async () => {
+      const source = Buffer.from('From: a@example.com\r\nSubject: hi\r\n\r\nbody');
+      const { ctor, mailboxOpen, fetchOne } = buildMockCtor({
+        fetchOne: () => Promise.resolve({ ...makeFetchMessage(1), source })
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getRawSource('acc-1', 'INBOX', 1);
+
+      expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
+      expect(fetchOne).toHaveBeenCalledWith(
+        '1',
+        expect.objectContaining({ source: true }),
+        { uid: true }
+      );
+      expect(result).toBe(source);
+    });
+
+    it('returns false when the message does not exist', async () => {
+      const { ctor } = buildMockCtor({ fetchOne: () => Promise.resolve(false) });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getRawSource('acc-1', 'INBOX', 999);
+      expect(result).toBe(false);
+    });
+  });
+
   describe('moveMessage', () => {
     it('opens mailbox, moves message by UID, then logs out', async () => {
       const copyResponse = { uidValidity: BigInt(1), uid: 10, destination: 'Archive' };

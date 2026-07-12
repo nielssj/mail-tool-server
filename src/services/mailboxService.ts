@@ -28,6 +28,13 @@ export type MessageDetail = FetchMessageObject & {
   attachments: MessageAttachment[];
 };
 
+export type AttachmentContent = {
+  filename?: string;
+  mimeType: string;
+  sizeBytes: number;
+  content: Buffer;
+};
+
 export type DownloadedPart = {
   meta: {
     contentType: string;
@@ -105,6 +112,17 @@ export type MailboxService = {
     mailbox: string,
     uid: number
   ) => Promise<MessageDetail | false>;
+  getAttachment: (
+    accountId: string,
+    mailbox: string,
+    uid: number,
+    partId: string
+  ) => Promise<AttachmentContent | false>;
+  getRawSource: (
+    accountId: string,
+    mailbox: string,
+    uid: number
+  ) => Promise<Buffer | false>;
   moveMessage: (
     accountId: string,
     mailbox: string,
@@ -247,13 +265,32 @@ const collectAttachments = (
   return acc;
 };
 
-const streamToString = async (stream: NodeJS.ReadableStream): Promise<string> => {
+const findNodeByPart = (
+  node: MessageStructureObject,
+  partId: string
+): MessageStructureObject | undefined => {
+  if (node.childNodes && node.childNodes.length > 0) {
+    for (const child of node.childNodes) {
+      const found = findNodeByPart(child, partId);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  return (node.part ?? '1') === partId ? node : undefined;
+};
+
+const streamToBuffer = async (stream: NodeJS.ReadableStream): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
 };
+
+const streamToString = async (stream: NodeJS.ReadableStream): Promise<string> =>
+  (await streamToBuffer(stream)).toString('utf8');
 
 export const createMailboxService = (
   accounts: AccountConfig[],
@@ -317,6 +354,57 @@ export const createMailboxService = (
     });
   };
 
+  const getAttachment = async (
+    accountId: string,
+    mailbox: string,
+    uid: number,
+    partId: string
+  ): Promise<AttachmentContent | false> => {
+    const account = findAccount(accounts, accountId);
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      const message = await client.fetchOne(
+        String(uid),
+        { uid: true, bodyStructure: true },
+        { uid: true }
+      );
+      if (!message || !message.bodyStructure) {
+        return false;
+      }
+
+      const node = findNodeByPart(message.bodyStructure, partId);
+      if (!node) {
+        return false;
+      }
+
+      const downloaded = await client.download(String(uid), partId, { uid: true });
+      const content = await streamToBuffer(downloaded.content);
+
+      return {
+        filename: downloaded.meta.filename ?? node.dispositionParameters?.filename ?? node.parameters?.name,
+        mimeType: downloaded.meta.contentType || node.type,
+        sizeBytes: content.length,
+        content
+      };
+    });
+  };
+
+  const getRawSource = async (
+    accountId: string,
+    mailbox: string,
+    uid: number
+  ): Promise<Buffer | false> => {
+    const account = findAccount(accounts, accountId);
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      const message = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
+      if (!message || !message.source) {
+        return false;
+      }
+      return message.source;
+    });
+  };
+
   const moveMessage = async (
     accountId: string,
     mailbox: string,
@@ -349,5 +437,13 @@ export const createMailboxService = (
     });
   };
 
-  return { listMailboxes, listMessages, getMessage, moveMessage, setFlags };
+  return {
+    listMailboxes,
+    listMessages,
+    getMessage,
+    getAttachment,
+    getRawSource,
+    moveMessage,
+    setFlags
+  };
 };

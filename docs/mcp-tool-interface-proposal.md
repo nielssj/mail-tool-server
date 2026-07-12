@@ -210,7 +210,7 @@ extended) by its existing suite. (The `export_message` hint target lands in
 Task 4.)
 
 ### Task 4 — Large-payload delivery: `get_attachment`, `export_message`
-**Status:** TODO
+**Status:** DONE
 **Description:** Add `storage/blobStore.ts` that stages a blob into the
 configured S3-style object store under a random key and mints a short-lived
 pre-signed GET URL, and extend the zod config schema with an object-storage
@@ -260,7 +260,14 @@ successfully call the tools using only the docs.
    (configurable), then points to `export_message`.
 2. **Object-storage staging** — stage a fresh blob per `get_attachment` /
    `export_message` call, with a short pre-signed-URL TTL and lifecycle-based
-   expiry for cleanup. Revisit caching only if it proves needed.
+   expiry for cleanup. Revisit caching only if it proves needed. Implemented
+   via the AWS SDK v3 (`@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`)
+   against any S3-compatible endpoint. `objectStorage` is an **optional**
+   block in config.json — required only for these two tools, which return a
+   clear tool error if it's absent. Adding it required restructuring
+   config.json's top level from a bare accounts array to
+   `{ accounts: [...], objectStorage: {...} }` — a breaking change to the
+   config file format, confirmed with the user before implementing.
 3. **Body/export format** — **raw is preferred**: `get_message` returns the
    `text/plain` part (or raw body as-is, no HTML rendering), and `export_message`
    delivers raw RFC822. No rendered-text export variant.

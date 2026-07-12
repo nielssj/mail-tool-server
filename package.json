@@ -28,6 +28,8 @@
   },
   "homepage": "https://github.com/nielssj/mail-tool-server#readme",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1085.0",
+    "@aws-sdk/s3-request-presigner": "^3.1085.0",
     "@fastify/swagger": "^9.8.0",
     "@fastify/swagger-ui": "^6.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -41,6 +43,7 @@
     "@types/node": "^26.1.1",
     "@typescript-eslint/eslint-plugin": "^8.63.0",
     "@typescript-eslint/parser": "^8.63.0",
+    "aws-sdk-client-mock": "^4.1.0",
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.1.8",
     "pino-pretty": "^13.1.3",

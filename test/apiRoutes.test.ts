@@ -53,6 +53,8 @@ const createMailboxServiceMock = (): MailboxService => {
   const getMessage: MailboxService['getMessage'] = vi.fn(
     async () => makeMessageDetail(1)
   );
+  const getAttachment: MailboxService['getAttachment'] = vi.fn(async () => false as const);
+  const getRawSource: MailboxService['getRawSource'] = vi.fn(async () => false as const);
   const moveMessage: MailboxService['moveMessage'] = vi.fn(async () => MOVE_RESULT);
   const setFlags: MailboxService['setFlags'] = vi.fn(async () => undefined);
 
@@ -60,6 +62,8 @@ const createMailboxServiceMock = (): MailboxService => {
     listMailboxes,
     listMessages,
     getMessage,
+    getAttachment,
+    getRawSource,
     moveMessage,
     setFlags
   };

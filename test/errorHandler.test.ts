@@ -8,6 +8,8 @@ const createMailboxServiceMock = (): MailboxService => ({
   listMailboxes: vi.fn(),
   listMessages: vi.fn(),
   getMessage: vi.fn(),
+  getAttachment: vi.fn(),
+  getRawSource: vi.fn(),
   moveMessage: vi.fn(),
   setFlags: vi.fn()
 });

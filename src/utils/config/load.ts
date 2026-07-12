@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ConfigSchema, type AccountConfig } from './schema.js';
+import { ConfigSchema, type Config } from './schema.js';
 
 const DEFAULT_CONFIG_PATH = './config.json';
 
@@ -11,7 +11,7 @@ export class ConfigLoadError extends Error {
   }
 }
 
-export const loadConfig = (configPath?: string): AccountConfig[] => {
+export const loadConfig = (configPath?: string): Config => {
   const filePath = resolve(
     configPath ?? process.env.CONFIG_PATH ?? DEFAULT_CONFIG_PATH
   );

@@ -35,12 +35,14 @@ Open the interactive API docs at <http://localhost:3000/docs>.
 
 ## Configuration
 
-The server loads a JSON config file describing one or more IMAP accounts. The
-path is resolved from the `CONFIG_PATH` environment variable, falling back to
-`./config.json` in the project root when unset. Invalid config fails fast at
-startup with a descriptive error.
+The server loads a JSON config file describing one or more IMAP accounts,
+plus optional object-storage settings. The path is resolved from the
+`CONFIG_PATH` environment variable, falling back to `./config.json` in the
+project root when unset. Invalid config fails fast at startup with a
+descriptive error.
 
-The file is a JSON **array** of account objects:
+The file is a JSON **object** with an `accounts` array and an optional
+`objectStorage` block:
 
 | Field            | Type       | Description                                                                 |
 | ---------------- | ---------- | --------------------------------------------------------------------------- |
@@ -63,22 +65,53 @@ implemented today is `webhook`:
 | `type` | string | Must be `"webhook"`.                             |
 | `url`  | string | HTTPS/HTTP URL that receives event POSTs.        |
 
+### Object storage
+
+Optional — required only for the MCP `get_attachment` / `export_message`
+tools, which stage large payloads (attachment bytes, full raw messages) here
+and hand back a short-lived pre-signed download URL instead of inlining
+bytes into a tool result. If omitted, those two tools return a tool error
+explaining that object storage isn't configured; everything else works
+without it. Points at any S3-compatible endpoint (real AWS S3, MinIO, R2,
+etc.) via the AWS SDK v3.
+
+| Field                        | Type    | Description                                                                 |
+| ----------------------------- | ------- | ----------------------------------------------------------------------------- |
+| `bucket`                      | string  | Bucket name to stage blobs into.                                              |
+| `region`                      | string  | AWS region (optional — required for real AWS S3, not for most self-hosted endpoints). |
+| `endpoint`                    | string  | Custom S3 API endpoint URL (e.g. a MinIO instance). Omit for real AWS S3.     |
+| `forcePathStyle`               | boolean | `true` for path-style requests, required by most non-AWS S3-compatible endpoints (e.g. MinIO). |
+| `credentials.accessKeyId`     | string  | Access key ID.                                                                |
+| `credentials.secretAccessKey` | string  | Secret access key.                                                            |
+| `urlTtlSeconds`               | number  | Pre-signed GET URL time-to-live, in seconds. Defaults to `900` (15 minutes).  |
+
 Example (`config.example.json`):
 
 ```json
-[
-  {
-    "id": "personal",
-    "host": "imap.example.com",
-    "port": 993,
-    "secure": true,
-    "auth": { "user": "you@example.com", "pass": "your-app-password" },
-    "watchMailboxes": ["INBOX"],
-    "dispatchers": [
-      { "type": "webhook", "url": "https://your-app.example.com/hooks/mail" }
-    ]
+{
+  "accounts": [
+    {
+      "id": "personal",
+      "host": "imap.example.com",
+      "port": 993,
+      "secure": true,
+      "auth": { "user": "you@example.com", "pass": "your-app-password" },
+      "watchMailboxes": ["INBOX"],
+      "dispatchers": [
+        { "type": "webhook", "url": "https://your-app.example.com/hooks/mail" }
+      ]
+    }
+  ],
+  "objectStorage": {
+    "bucket": "your-bucket-name",
+    "region": "us-east-1",
+    "credentials": {
+      "accessKeyId": "your-access-key-id",
+      "secretAccessKey": "your-secret-access-key"
+    },
+    "urlTtlSeconds": 900
   }
-]
+}
 ```
 
 ### Environment variables
