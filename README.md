@@ -172,19 +172,6 @@ full tool reference (every tool's parameters, output shape, and error codes).
 automatically by `npm run dev`/`npm start` alongside the HTTP API; set
 `HTTP_ENABLED=false` to run the MCP server on its own.
 
-**Tools:**
-
-| Tool             | Description                                                    |
-| ---------------- | ---------------------------------------------------------------- |
-| `list_accounts`  | List configured accounts (never credentials).                    |
-| `list_mailboxes` | List an account's IMAP folders.                                  |
-| `list_messages`  | Compact, paginated message summaries — never full bodies.        |
-| `get_message`    | One message's envelope + body (capped at 8000 chars).            |
-| `get_attachment` | Stage an attachment into object storage, return a download URL.  |
-| `export_message` | Stage the full raw message into object storage, return a download URL. |
-| `move_message`   | Move a message to another mailbox. Destructive.                  |
-| `set_flags`      | Add/remove IMAP flags on a message. Idempotent.                  |
-
 `get_attachment`/`export_message` require [Object storage](#object-storage)
 configured. `move_message`/`set_flags` are disabled per-account by
 [`readOnly`](#configuration).
