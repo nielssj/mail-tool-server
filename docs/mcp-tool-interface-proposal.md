@@ -73,7 +73,19 @@ tool-call traces.
   too and IMAP stays in one place) to fetch the body (prefer the `text/plain`
   part; otherwise return the raw body content as-is — no HTML-to-text rendering),
   the raw source, and attachment **metadata** (filename, mime type, size, part
-  id) — never attachment bytes inline.
+  id) — never attachment bytes inline. `getMessage`'s bodyStructure-driven part
+  selection (text/plain preferred, MIME tree walked via `imapflow`'s
+  `download()` for decoded content) is a per-message operation and stays that
+  way; `listMessages` keeps its single-round-trip batched fetch and derives
+  `snippet` from the raw, undecoded bytes of MIME part "1" (the conventional
+  first part) rather than per-message bodyStructure inspection — cheap at
+  list scale, occasionally imprecise for non-standard MIME layouts.
+  `getMessage`'s enriched result (raw `source` included, for Task 4 reuse) now
+  also flows through the existing HTTP `GET .../messages/:uid` route, which
+  forwards it unfiltered — a real payload-size increase for messages with
+  attachments (a `Buffer` serializes to a JSON byte-number array), accepted
+  as an intentional extension per Task 3's acceptance criteria rather than
+  redesigning the HTTP response shape.
 
 - **`get_message` returns a bounded body; overflow goes out-of-band.**
   `get_message` returns the body text only **up to a strict cap of 8000
@@ -178,7 +190,7 @@ includes both, a happy-path `callTool` returns the expected structured payload,
 error (not a thrown exception).
 
 ### Task 3 — Message tools: `list_messages` + `get_message` (bounded body)
-**Status:** TODO
+**Status:** DONE
 **Description:** Close the body-fetch gap at the service level — extend message
 retrieval to fetch the body (prefer the `text/plain` part; otherwise return the
 raw body as-is, no HTML-to-text rendering), the raw source, and attachment

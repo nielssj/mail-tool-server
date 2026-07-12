@@ -3,6 +3,7 @@ import type { MailboxService } from '../services/mailboxService.js';
 import type { AccountConfig } from '../utils/config/schema.js';
 import packageJson from '../../package.json' with { type: 'json' };
 import { registerAccountTools } from './tools/accounts.js';
+import { registerMessageTools } from './tools/messages.js';
 
 export type CreateMcpServerOptions = {
   mailboxService: MailboxService;
@@ -21,6 +22,7 @@ export const createMcpServer = (options: CreateMcpServerOptions): McpServer => {
   });
 
   registerAccountTools(server, options);
+  registerMessageTools(server, options);
 
   return server;
 };

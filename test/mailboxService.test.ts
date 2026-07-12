@@ -1,10 +1,17 @@
+import { Readable } from 'node:stream';
 import { describe, it, expect, vi } from 'vitest';
 import {
   createMailboxService,
-  type MailboxClientConstructor
+  type MailboxClientConstructor,
+  type DownloadedPart
 } from '../src/services/mailboxService.js';
 import { ImapConnectionError } from '../src/imap/clientFactory.js';
-import type { ListResponse, FetchMessageObject } from 'imapflow';
+import type { ListResponse, FetchMessageObject, MessageStructureObject } from 'imapflow';
+
+const makeDownload = (text: string): DownloadedPart => ({
+  meta: { contentType: 'text/plain' },
+  content: Readable.from([Buffer.from(text, 'utf8')])
+});
 
 const ACCOUNT = {
   id: 'acc-1',
@@ -47,6 +54,7 @@ type MockClientOverrides = Partial<{
   mailboxOpen: () => Promise<object>;
   fetchAll: () => Promise<FetchMessageObject[]>;
   fetchOne: () => Promise<FetchMessageObject | false>;
+  download: () => Promise<DownloadedPart>;
   messageMove: () => Promise<object | false>;
   messageFlagsAdd: () => Promise<boolean>;
   messageFlagsRemove: () => Promise<boolean>;
@@ -65,6 +73,9 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
   const fetchOne = vi.fn(
     overrides.fetchOne ?? (() => Promise.resolve(false as const))
   );
+  const download = vi.fn(
+    overrides.download ?? (() => Promise.resolve(makeDownload('')))
+  );
   const messageMove = vi.fn(
     overrides.messageMove ?? (() => Promise.resolve(false as const))
   );
@@ -82,6 +93,7 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
     mailboxOpen = mailboxOpen;
     fetchAll = fetchAll;
     fetchOne = fetchOne;
+    download = download;
     messageMove = messageMove;
     messageFlagsAdd = messageFlagsAdd;
     messageFlagsRemove = messageFlagsRemove;
@@ -89,7 +101,19 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
 
   const ctor = MockMailboxClient as unknown as MailboxClientConstructor;
 
-  return { ctor, connect, logout, list, mailboxOpen, fetchAll, fetchOne, messageMove, messageFlagsAdd, messageFlagsRemove };
+  return {
+    ctor,
+    connect,
+    logout,
+    list,
+    mailboxOpen,
+    fetchAll,
+    fetchOne,
+    download,
+    messageMove,
+    messageFlagsAdd,
+    messageFlagsRemove
+  };
 };
 
 describe('createMailboxService', () => {
@@ -151,7 +175,10 @@ describe('createMailboxService', () => {
       expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
       expect(fetchAll).toHaveBeenCalledWith(
         '1:*',
-        expect.objectContaining({ uid: true }),
+        expect.objectContaining({
+          uid: true,
+          bodyParts: [{ key: '1', maxLength: expect.any(Number) }]
+        }),
         { uid: true }
       );
       expect(logout).toHaveBeenCalledTimes(1);
@@ -190,7 +217,7 @@ describe('createMailboxService', () => {
   });
 
   describe('getMessage', () => {
-    it('opens mailbox, fetches one message by UID, then logs out', async () => {
+    it('opens mailbox, fetches one message by UID with body structure + source, then logs out', async () => {
       const message = makeFetchMessage(7);
       const { ctor, connect, logout, mailboxOpen, fetchOne } = buildMockCtor({
         fetchOne: () => Promise.resolve(message)
@@ -201,9 +228,13 @@ describe('createMailboxService', () => {
 
       expect(connect).toHaveBeenCalledTimes(1);
       expect(mailboxOpen).toHaveBeenCalledWith('INBOX');
-      expect(fetchOne).toHaveBeenCalledWith('7', expect.objectContaining({ uid: true }), { uid: true });
+      expect(fetchOne).toHaveBeenCalledWith(
+        '7',
+        expect.objectContaining({ uid: true, bodyStructure: true, source: true }),
+        { uid: true }
+      );
       expect(logout).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(message);
+      expect(result).toEqual({ ...message, body: '', attachments: [] });
     });
 
     it('returns false when UID does not exist', async () => {
@@ -213,6 +244,124 @@ describe('createMailboxService', () => {
       const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
       const result = await service.getMessage('acc-1', 'INBOX', 99);
       expect(result).toBe(false);
+    });
+
+    it('has no body/attachments when the message has no bodyStructure', async () => {
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () => Promise.resolve(makeFetchMessage(1))
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 1);
+
+      expect(download).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ body: '', attachments: [] });
+    });
+
+    it('downloads part "1" as the body for a non-multipart text/plain message', async () => {
+      const bodyStructure: MessageStructureObject = { type: 'text/plain', size: 40 };
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () =>
+          Promise.resolve({ ...makeFetchMessage(1), bodyStructure }),
+        download: () => Promise.resolve(makeDownload('Hello there'))
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 1);
+
+      expect(download).toHaveBeenCalledWith('1', '1', { uid: true });
+      expect(result).toMatchObject({ body: 'Hello there', attachments: [] });
+    });
+
+    it('prefers text/plain over text/html in a multipart/alternative message', async () => {
+      const bodyStructure: MessageStructureObject = {
+        type: 'multipart/alternative',
+        childNodes: [
+          { part: '1', type: 'text/plain', size: 20 },
+          { part: '2', type: 'text/html', size: 60 }
+        ]
+      };
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () =>
+          Promise.resolve({ ...makeFetchMessage(1), bodyStructure }),
+        download: () => Promise.resolve(makeDownload('Plain text body'))
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 1);
+
+      expect(download).toHaveBeenCalledWith('1', '1', { uid: true });
+      expect(result).toMatchObject({ body: 'Plain text body', attachments: [] });
+    });
+
+    it('falls back to text/html as-is when there is no text/plain part', async () => {
+      const bodyStructure: MessageStructureObject = {
+        type: 'multipart/mixed',
+        childNodes: [{ part: '1', type: 'text/html', size: 60 }]
+      };
+      const { ctor } = buildMockCtor({
+        fetchOne: () =>
+          Promise.resolve({ ...makeFetchMessage(1), bodyStructure }),
+        download: () => Promise.resolve(makeDownload('<p>Hi</p>'))
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 1);
+
+      expect(result).toMatchObject({ body: '<p>Hi</p>', attachments: [] });
+    });
+
+    it('extracts attachment metadata and excludes the chosen text part', async () => {
+      const bodyStructure: MessageStructureObject = {
+        type: 'multipart/mixed',
+        childNodes: [
+          { part: '1', type: 'text/plain', size: 20 },
+          {
+            part: '2',
+            type: 'application/pdf',
+            size: 5000,
+            disposition: 'attachment',
+            dispositionParameters: { filename: 'invoice.pdf' }
+          }
+        ]
+      };
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () =>
+          Promise.resolve({ ...makeFetchMessage(1), bodyStructure }),
+        download: () => Promise.resolve(makeDownload('See attached invoice'))
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 1);
+
+      expect(download).toHaveBeenCalledWith('1', '1', { uid: true });
+      expect(result).toMatchObject({
+        body: 'See attached invoice',
+        attachments: [
+          { partId: '2', filename: 'invoice.pdf', mimeType: 'application/pdf', sizeBytes: 5000 }
+        ]
+      });
+    });
+
+    it('leaves body empty and does not call download when there is no text part', async () => {
+      const bodyStructure: MessageStructureObject = {
+        type: 'application/pdf',
+        size: 5000,
+        disposition: 'attachment',
+        dispositionParameters: { filename: 'invoice.pdf' }
+      };
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () =>
+          Promise.resolve({ ...makeFetchMessage(1), bodyStructure })
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.getMessage('acc-1', 'INBOX', 1);
+
+      expect(download).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        body: '',
+        attachments: [{ partId: '1', filename: 'invoice.pdf', mimeType: 'application/pdf' }]
+      });
     });
   });
 

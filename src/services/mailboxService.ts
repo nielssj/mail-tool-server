@@ -4,6 +4,7 @@ import type {
   FetchMessageObject,
   FetchQueryObject,
   MailboxObject,
+  MessageStructureObject,
   CopyResponseObject,
   StoreOptions
 } from 'imapflow';
@@ -11,6 +12,32 @@ import type { AccountConfig } from '../utils/config/schema.js';
 import { ImapConnectionError } from '../imap/clientFactory.js';
 
 export type { ListResponse, FetchMessageObject };
+
+export type MessageAttachment = {
+  partId: string;
+  filename?: string;
+  mimeType: string;
+  sizeBytes?: number;
+};
+
+export type MessageDetail = FetchMessageObject & {
+  /** Decoded text of the preferred body part — text/plain if present,
+   * otherwise the first text/* part as-is (no HTML-to-text rendering). */
+  body: string;
+  /** Attachment metadata only — never bytes. */
+  attachments: MessageAttachment[];
+};
+
+export type DownloadedPart = {
+  meta: {
+    contentType: string;
+    charset?: string;
+    disposition?: string;
+    filename?: string;
+    encoding?: string;
+  };
+  content: NodeJS.ReadableStream;
+};
 
 export type MailboxClient = {
   connect: () => Promise<void>;
@@ -27,6 +54,11 @@ export type MailboxClient = {
     query: FetchQueryObject,
     options?: { uid?: boolean }
   ) => Promise<FetchMessageObject | false>;
+  download: (
+    range: string,
+    part: string | undefined,
+    options?: { uid?: boolean }
+  ) => Promise<DownloadedPart>;
   messageMove: (
     range: string,
     destination: string,
@@ -72,7 +104,7 @@ export type MailboxService = {
     accountId: string,
     mailbox: string,
     uid: number
-  ) => Promise<FetchMessageObject | false>;
+  ) => Promise<MessageDetail | false>;
   moveMessage: (
     accountId: string,
     mailbox: string,
@@ -88,12 +120,32 @@ export type MailboxService = {
   ) => Promise<void>;
 };
 
-const FETCH_QUERY: FetchQueryObject = {
+/** Raw byte cap for the list-view snippet fetch — kept generous relative to
+ * the short text a summary actually shows, to leave room for multi-byte
+ * UTF-8 / quoted-printable expansion before format.ts trims it down. */
+const SNIPPET_FETCH_MAX_BYTES = 1024;
+
+const LIST_FETCH_QUERY: FetchQueryObject = {
   uid: true,
   flags: true,
   envelope: true,
   internalDate: true,
-  size: true
+  size: true,
+  // Best-effort snippet source: part "1" is the first MIME part in document
+  // order, which for plain-text and multipart/alternative messages is
+  // conventionally the text body. Raw bytes, undecoded — good enough for a
+  // triage preview; get_message does proper part selection and decoding.
+  bodyParts: [{ key: '1', maxLength: SNIPPET_FETCH_MAX_BYTES }]
+};
+
+const DETAIL_FETCH_QUERY: FetchQueryObject = {
+  uid: true,
+  flags: true,
+  envelope: true,
+  internalDate: true,
+  size: true,
+  bodyStructure: true,
+  source: true
 };
 
 const withClient = async <T>(
@@ -140,6 +192,69 @@ const findAccount = (
   return account;
 };
 
+const isTextType = (type: string): boolean => type.toLowerCase().startsWith('text/');
+
+/** Depth-first leaves only — a MIME node is either a container (childNodes)
+ * or content, never both. */
+const collectTextLeaves = (
+  node: MessageStructureObject,
+  acc: MessageStructureObject[] = []
+): MessageStructureObject[] => {
+  if (node.childNodes && node.childNodes.length > 0) {
+    for (const child of node.childNodes) {
+      collectTextLeaves(child, acc);
+    }
+    return acc;
+  }
+  if (node.disposition !== 'attachment' && node.type && isTextType(node.type)) {
+    acc.push(node);
+  }
+  return acc;
+};
+
+const findPreferredTextPart = (
+  root: MessageStructureObject
+): MessageStructureObject | undefined => {
+  const leaves = collectTextLeaves(root);
+  return leaves.find((leaf) => leaf.type.toLowerCase() === 'text/plain') ?? leaves[0];
+};
+
+const collectAttachments = (
+  node: MessageStructureObject,
+  textPart: MessageStructureObject | undefined,
+  acc: MessageAttachment[] = []
+): MessageAttachment[] => {
+  if (node.childNodes && node.childNodes.length > 0) {
+    for (const child of node.childNodes) {
+      collectAttachments(child, textPart, acc);
+    }
+    return acc;
+  }
+
+  if (node === textPart) {
+    return acc;
+  }
+
+  const filename = node.dispositionParameters?.filename ?? node.parameters?.name;
+  if (node.disposition === 'attachment' || filename) {
+    acc.push({
+      partId: node.part ?? '1',
+      filename,
+      mimeType: node.type,
+      sizeBytes: node.size
+    });
+  }
+  return acc;
+};
+
+const streamToString = async (stream: NodeJS.ReadableStream): Promise<string> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+};
+
 export const createMailboxService = (
   accounts: AccountConfig[],
   options: MailboxServiceOptions = {}
@@ -161,7 +276,7 @@ export const createMailboxService = (
     return withClient(account, ctor, async (client) => {
       await client.mailboxOpen(mailbox);
       const range = opts.sinceUid != null ? `${opts.sinceUid}:*` : '1:*';
-      const all = await client.fetchAll(range, FETCH_QUERY, { uid: true });
+      const all = await client.fetchAll(range, LIST_FETCH_QUERY, { uid: true });
       if (opts.limit != null && all.length > opts.limit) {
         return all.slice(-opts.limit);
       }
@@ -173,11 +288,32 @@ export const createMailboxService = (
     accountId: string,
     mailbox: string,
     uid: number
-  ): Promise<FetchMessageObject | false> => {
+  ): Promise<MessageDetail | false> => {
     const account = findAccount(accounts, accountId);
     return withClient(account, ctor, async (client) => {
       await client.mailboxOpen(mailbox);
-      return client.fetchOne(String(uid), FETCH_QUERY, { uid: true });
+      const message = await client.fetchOne(String(uid), DETAIL_FETCH_QUERY, {
+        uid: true
+      });
+      if (!message) {
+        return false;
+      }
+
+      let body = '';
+      let attachments: MessageAttachment[] = [];
+
+      if (message.bodyStructure) {
+        const textPart = findPreferredTextPart(message.bodyStructure);
+        if (textPart) {
+          const downloaded = await client.download(String(uid), textPart.part ?? '1', {
+            uid: true
+          });
+          body = await streamToString(downloaded.content);
+        }
+        attachments = collectAttachments(message.bodyStructure, textPart);
+      }
+
+      return { ...message, body, attachments };
     });
   };
 
