@@ -33,7 +33,7 @@ describe('createMcpServer', () => {
     client = undefined;
   });
 
-  it('responds to initialize and returns an empty tools/list over the in-memory transport', async () => {
+  it('responds to initialize and lists the registered tools over the in-memory transport', async () => {
     const server = createMcpServer({
       mailboxService: makeMailboxService(),
       accounts: ACCOUNTS
@@ -52,6 +52,6 @@ describe('createMcpServer', () => {
     expect(serverVersion?.name).toBe('mail-tool-server');
 
     const { tools } = await client.listTools();
-    expect(tools).toEqual([]);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(['list_accounts', 'list_mailboxes']);
   });
 });

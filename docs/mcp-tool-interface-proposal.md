@@ -167,7 +167,7 @@ separate ports; setting `HTTP_ENABLED=false` or `MCP_ENABLED=false` disables
 the respective interface; existing HTTP suite still passes.
 
 ### Task 2 — Discovery tools: `list_accounts`, `list_mailboxes`
-**Status:** TODO
+**Status:** DONE
 **Description:** Register the two read-only discovery tools. `list_accounts`
 projects config to `{ id, host, watchMailboxes }` with **no secrets**;
 `list_mailboxes` calls `mailboxService.listMailboxes`. Both declare input/output
