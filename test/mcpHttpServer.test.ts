@@ -48,7 +48,7 @@ describe('createMcpHttpServer', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it('responds to initialize and returns an empty tools/list over Streamable HTTP', async () => {
+  it('responds to initialize and lists the registered tools over Streamable HTTP', async () => {
     client = new Client({ name: 'test-client', version: '0.0.0' });
     await client.connect(new StreamableHTTPClientTransport(baseUrl));
 
@@ -56,7 +56,7 @@ describe('createMcpHttpServer', () => {
     expect(serverVersion?.name).toBe('mail-tool-server');
 
     const { tools } = await client.listTools();
-    expect(tools).toEqual([]);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(['list_accounts', 'list_mailboxes']);
   });
 
   it('returns 404 for unknown paths', async () => {
