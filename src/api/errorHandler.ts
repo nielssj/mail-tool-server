@@ -1,5 +1,6 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import { ImapConnectionError } from '../imap/clientFactory.js';
+import { ReadOnlyAccountError } from '../services/mailboxService.js';
 import { NotFoundError, isResourceNotFoundError } from './routes/shared.js';
 
 export const errorHandler = (
@@ -24,6 +25,13 @@ export const errorHandler = (
   if (error instanceof ImapConnectionError) {
     void reply.code(503).send({
       error: { message: error.message, code: 'IMAP_CONNECTION_ERROR' }
+    });
+    return;
+  }
+
+  if (error instanceof ReadOnlyAccountError) {
+    void reply.code(403).send({
+      error: { message: error.message, code: 'READ_ONLY_ACCOUNT' }
     });
     return;
   }

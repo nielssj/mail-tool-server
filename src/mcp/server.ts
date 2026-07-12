@@ -6,6 +6,7 @@ import packageJson from '../../package.json' with { type: 'json' };
 import { registerAccountTools } from './tools/accounts.js';
 import { registerMessageTools } from './tools/messages.js';
 import { registerDeliveryTools } from './tools/delivery.js';
+import { registerMutationTools } from './tools/mutations.js';
 
 export type CreateMcpServerOptions = {
   mailboxService: MailboxService;
@@ -29,6 +30,7 @@ export const createMcpServer = (options: CreateMcpServerOptions): McpServer => {
   registerAccountTools(server, options);
   registerMessageTools(server, options);
   registerDeliveryTools(server, options);
+  registerMutationTools(server, options);
 
   return server;
 };

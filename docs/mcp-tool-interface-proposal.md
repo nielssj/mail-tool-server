@@ -227,13 +227,19 @@ filenames are sanitized, and unknown `uid`/part id yields a tool error. An
 end-to-end check confirms a returned URL actually downloads the expected bytes.
 
 ### Task 5 — Mutating tools: `move_message`, `set_flags`
-**Status:** TODO
+**Status:** DONE
 **Description:** Register the two mutating tools with correct annotations
 (`move_message` destructive, `set_flags` idempotent) and clear descriptions.
 `set_flags` takes `add`/`remove` string arrays; validate flag inputs.
+**Addition:** an optional per-account `readOnly` boolean in config.json.
+When `true`, `mailboxService.moveMessage`/`setFlags` reject with a
+`ReadOnlyAccountError` (mapped to HTTP 403) instead of executing — enforced
+at the service level so the HTTP API respects it too, not just these two MCP
+tools.
 **Acceptance criteria:** Unit tests assert correct `mailboxService` calls and
 arguments, success payloads, annotation metadata, and tool errors on
-unknown-mailbox / not-found conditions.
+unknown-mailbox / not-found conditions, plus the read-only guard (rejects
+without connecting, for both tools, for both the MCP and HTTP surfaces).
 
 ### Task 6 — Error mapping + structured-output polish
 **Status:** TODO

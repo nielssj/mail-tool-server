@@ -2,6 +2,7 @@ import { Readable } from 'node:stream';
 import { describe, it, expect, vi } from 'vitest';
 import {
   createMailboxService,
+  ReadOnlyAccountError,
   type MailboxClientConstructor,
   type DownloadedPart
 } from '../src/services/mailboxService.js';
@@ -23,7 +24,9 @@ const ACCOUNT = {
   dispatchers: []
 };
 
-const ACCOUNTS = [ACCOUNT];
+const READ_ONLY_ACCOUNT = { ...ACCOUNT, id: 'acc-ro', readOnly: true };
+
+const ACCOUNTS = [ACCOUNT, READ_ONLY_ACCOUNT];
 
 const makeListResponse = (path: string): ListResponse => ({
   path,
@@ -532,6 +535,20 @@ describe('createMailboxService', () => {
       expect(logout).toHaveBeenCalledTimes(1);
       expect(result).toEqual(copyResponse);
     });
+
+    it('rejects with ReadOnlyAccountError for a read-only account without connecting', async () => {
+      const { ctor, connect, messageMove } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+
+      await expect(service.moveMessage('acc-ro', 'INBOX', 5, 'Archive')).rejects.toThrow(
+        ReadOnlyAccountError
+      );
+      await expect(service.moveMessage('acc-ro', 'INBOX', 5, 'Archive')).rejects.toThrow(
+        /Account "acc-ro" is read-only; move_message is disabled/
+      );
+      expect(connect).not.toHaveBeenCalled();
+      expect(messageMove).not.toHaveBeenCalled();
+    });
   });
 
   describe('setFlags', () => {
@@ -562,6 +579,20 @@ describe('createMailboxService', () => {
       await service.setFlags('acc-1', 'INBOX', 3, ['\\Flagged'], []);
       expect(messageFlagsAdd).toHaveBeenCalledTimes(1);
       expect(messageFlagsRemove).not.toHaveBeenCalled();
+    });
+
+    it('rejects with ReadOnlyAccountError for a read-only account without connecting', async () => {
+      const { ctor, connect, messageFlagsAdd } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+
+      await expect(
+        service.setFlags('acc-ro', 'INBOX', 3, ['\\Flagged'], [])
+      ).rejects.toThrow(ReadOnlyAccountError);
+      await expect(
+        service.setFlags('acc-ro', 'INBOX', 3, ['\\Flagged'], [])
+      ).rejects.toThrow(/Account "acc-ro" is read-only; set_flags is disabled/);
+      expect(connect).not.toHaveBeenCalled();
+      expect(messageFlagsAdd).not.toHaveBeenCalled();
     });
   });
 });
