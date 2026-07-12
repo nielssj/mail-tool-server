@@ -127,6 +127,22 @@ describe('delivery tools', () => {
       expect(result.isError).toBe(true);
       expect(getAttachment).not.toHaveBeenCalled();
     });
+
+    it('surfaces the service-level oversized-attachment rejection as a tool error', async () => {
+      const getAttachment = vi.fn(async () => {
+        throw new Error('Attachment part "2" is 26214401 bytes, exceeding the 26214400-byte limit');
+      });
+      const stage = vi.fn(async () => STAGED);
+      const c = await connect({ getAttachment }, { stage });
+
+      const result = await c.callTool({
+        name: 'get_attachment',
+        arguments: { accountId: 'acc-1', mailbox: 'INBOX', uid: 5, partId: '2' }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(stage).not.toHaveBeenCalled();
+    });
   });
 
   describe('export_message', () => {
@@ -165,6 +181,22 @@ describe('delivery tools', () => {
       const result = await c.callTool({
         name: 'export_message',
         arguments: { accountId: 'acc-1', mailbox: 'INBOX', uid: 999 }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(stage).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the service-level oversized-message rejection as a tool error', async () => {
+      const getRawSource = vi.fn(async () => {
+        throw new Error('Message "7" is 26214401 bytes, exceeding the 26214400-byte limit');
+      });
+      const stage = vi.fn(async () => STAGED);
+      const c = await connect({ getRawSource }, { stage });
+
+      const result = await c.callTool({
+        name: 'export_message',
+        arguments: { accountId: 'acc-1', mailbox: 'INBOX', uid: 7 }
       });
 
       expect(result.isError).toBe(true);

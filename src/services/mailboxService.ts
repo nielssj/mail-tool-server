@@ -143,6 +143,21 @@ export type MailboxService = {
  * UTF-8 / quoted-printable expansion before format.ts trims it down. */
 const SNIPPET_FETCH_MAX_BYTES = 1024;
 
+/** Hard ceiling for getAttachment/getRawSource — both fully buffer their
+ * content in memory (see PR #19 discussion: streaming isn't worth the
+ * complexity, since S3's 5MB multipart minimum means typical mail
+ * attachments get buffered whole either way). This bounds worst-case memory
+ * from a single outlier request; checked against the pre-decode size IMAP
+ * already reports (bodyStructure part size / RFC822.SIZE) before fetching
+ * any content, so an oversized attachment or message is rejected without
+ * ever pulling its bytes into memory. */
+const MAX_FETCH_BYTES = 25 * 1024 * 1024;
+
+const tooLargeError = (kind: string, id: string | number, sizeBytes: number): Error =>
+  new Error(
+    `${kind} "${id}" is ${sizeBytes} bytes, exceeding the ${MAX_FETCH_BYTES}-byte limit`
+  );
+
 const LIST_FETCH_QUERY: FetchQueryObject = {
   uid: true,
   flags: true,
@@ -377,6 +392,10 @@ export const createMailboxService = (
         return false;
       }
 
+      if (node.size != null && node.size > MAX_FETCH_BYTES) {
+        throw tooLargeError('Attachment part', partId, node.size);
+      }
+
       const downloaded = await client.download(String(uid), partId, { uid: true });
       const content = await streamToBuffer(downloaded.content);
 
@@ -397,6 +416,15 @@ export const createMailboxService = (
     const account = findAccount(accounts, accountId);
     return withClient(account, ctor, async (client) => {
       await client.mailboxOpen(mailbox);
+
+      const meta = await client.fetchOne(String(uid), { uid: true, size: true }, { uid: true });
+      if (!meta) {
+        return false;
+      }
+      if (meta.size != null && meta.size > MAX_FETCH_BYTES) {
+        throw tooLargeError('Message', uid, meta.size);
+      }
+
       const message = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
       if (!message || !message.source) {
         return false;

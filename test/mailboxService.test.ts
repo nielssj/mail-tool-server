@@ -444,6 +444,31 @@ describe('createMailboxService', () => {
       expect(result).toBe(false);
       expect(download).not.toHaveBeenCalled();
     });
+
+    it('rejects an oversized part without downloading it', async () => {
+      const oversized: MessageStructureObject = {
+        type: 'multipart/mixed',
+        childNodes: [
+          { part: '1', type: 'text/plain', size: 20 },
+          {
+            part: '2',
+            type: 'application/zip',
+            size: 26 * 1024 * 1024,
+            disposition: 'attachment',
+            dispositionParameters: { filename: 'huge.zip' }
+          }
+        ]
+      };
+      const { ctor, download } = buildMockCtor({
+        fetchOne: () => Promise.resolve({ ...makeFetchMessage(1), bodyStructure: oversized })
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+
+      await expect(service.getAttachment('acc-1', 'INBOX', 1, '2')).rejects.toThrow(
+        /exceeding the 26214400-byte limit/
+      );
+      expect(download).not.toHaveBeenCalled();
+    });
   });
 
   describe('getRawSource', () => {
@@ -470,6 +495,24 @@ describe('createMailboxService', () => {
       const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
       const result = await service.getRawSource('acc-1', 'INBOX', 999);
       expect(result).toBe(false);
+    });
+
+    it('rejects an oversized message without fetching its source', async () => {
+      const { ctor, fetchOne } = buildMockCtor({
+        fetchOne: () => Promise.resolve({ ...makeFetchMessage(1), size: 26 * 1024 * 1024 })
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+
+      await expect(service.getRawSource('acc-1', 'INBOX', 1)).rejects.toThrow(
+        /exceeding the 26214400-byte limit/
+      );
+      expect(fetchOne).toHaveBeenCalledTimes(1);
+      expect(fetchOne).toHaveBeenCalledWith(
+        '1',
+        expect.objectContaining({ size: true }),
+        { uid: true }
+      );
     });
   });
 
