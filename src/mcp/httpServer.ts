@@ -3,10 +3,12 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createMcpServer } from './server.js';
 import type { MailboxService } from '../services/mailboxService.js';
 import type { AccountConfig } from '../utils/config/schema.js';
+import type { BlobStore } from '../storage/blobStore.js';
 
 export type CreateMcpHttpServerOptions = {
   mailboxService: MailboxService;
   accounts: AccountConfig[];
+  blobStore?: BlobStore;
 };
 
 const readJsonBody = (req: IncomingMessage): Promise<unknown> =>

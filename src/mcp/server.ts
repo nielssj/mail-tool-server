@@ -1,13 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../services/mailboxService.js';
 import type { AccountConfig } from '../utils/config/schema.js';
+import type { BlobStore } from '../storage/blobStore.js';
 import packageJson from '../../package.json' with { type: 'json' };
 import { registerAccountTools } from './tools/accounts.js';
 import { registerMessageTools } from './tools/messages.js';
+import { registerDeliveryTools } from './tools/delivery.js';
 
 export type CreateMcpServerOptions = {
   mailboxService: MailboxService;
   accounts: AccountConfig[];
+  /** Optional — required only for get_attachment/export_message, which
+   * throw a clear tool error if called without it configured. */
+  blobStore?: BlobStore;
 };
 
 /**
@@ -23,6 +28,7 @@ export const createMcpServer = (options: CreateMcpServerOptions): McpServer => {
 
   registerAccountTools(server, options);
   registerMessageTools(server, options);
+  registerDeliveryTools(server, options);
 
   return server;
 };

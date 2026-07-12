@@ -21,6 +21,8 @@ const makeMailboxService = (): MailboxService => ({
   listMailboxes: async () => [],
   listMessages: async () => [],
   getMessage: async () => false,
+  getAttachment: async () => false,
+  getRawSource: async () => false,
   moveMessage: async () => false,
   setFlags: async () => undefined
 });
@@ -53,6 +55,8 @@ describe('createMcpServer', () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'export_message',
+      'get_attachment',
       'get_message',
       'list_accounts',
       'list_mailboxes',

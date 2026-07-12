@@ -1,19 +1,30 @@
-[
-  {
-    "id": "personal",
-    "host": "imap.example.com",
-    "port": 993,
-    "secure": true,
-    "auth": {
-      "user": "you@example.com",
-      "pass": "your-app-password"
+{
+  "accounts": [
+    {
+      "id": "personal",
+      "host": "imap.example.com",
+      "port": 993,
+      "secure": true,
+      "auth": {
+        "user": "you@example.com",
+        "pass": "your-app-password"
+      },
+      "watchMailboxes": ["INBOX"],
+      "dispatchers": [
+        {
+          "type": "webhook",
+          "url": "https://your-app.example.com/hooks/mail"
+        }
+      ]
+    }
+  ],
+  "objectStorage": {
+    "bucket": "your-bucket-name",
+    "region": "us-east-1",
+    "credentials": {
+      "accessKeyId": "your-access-key-id",
+      "secretAccessKey": "your-secret-access-key"
     },
-    "watchMailboxes": ["INBOX"],
-    "dispatchers": [
-      {
-        "type": "webhook",
-        "url": "https://your-app.example.com/hooks/mail"
-      }
-    ]
+    "urlTtlSeconds": 900
   }
-]
+}
