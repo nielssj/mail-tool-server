@@ -133,7 +133,7 @@ the existing workflow (implement, mark `Status: DONE` here, open PR, await
 approval).
 
 ### Task 1 — MCP scaffolding + shared service bootstrap
-**Status:** TODO
+**Status:** DONE
 **Description:** Add `@modelcontextprotocol/sdk`. Extract a `buildServices(config)`
 helper (`src/bootstrap.ts`) that constructs the `mailboxService` (and watchers),
 and refactor `server.ts` to use it. Add `src/mcp/server.ts` exporting
