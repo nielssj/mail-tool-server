@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { isResourceNotFoundError } from '../src/api/routes/shared.js';
-import type { MailboxService } from '../src/services/mailboxService.js';
+import type { MailboxService, MessageDetail } from '../src/services/mailboxService.js';
 import type {
   CopyResponseObject,
   FetchMessageObject,
@@ -31,6 +31,12 @@ const makeFetchMessage = (uid: number): FetchMessageObject => ({
   size: 100
 });
 
+const makeMessageDetail = (uid: number): MessageDetail => ({
+  ...makeFetchMessage(uid),
+  body: `Body ${uid}`,
+  attachments: []
+});
+
 const MOVE_RESULT: CopyResponseObject = {
   path: 'INBOX',
   destination: 'Archive',
@@ -45,7 +51,7 @@ const createMailboxServiceMock = (): MailboxService => {
     async () => [makeFetchMessage(1)]
   );
   const getMessage: MailboxService['getMessage'] = vi.fn(
-    async () => makeFetchMessage(1)
+    async () => makeMessageDetail(1)
   );
   const moveMessage: MailboxService['moveMessage'] = vi.fn(async () => MOVE_RESULT);
   const setFlags: MailboxService['setFlags'] = vi.fn(async () => undefined);

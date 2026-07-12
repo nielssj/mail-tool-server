@@ -52,6 +52,11 @@ describe('createMcpServer', () => {
     expect(serverVersion?.name).toBe('mail-tool-server');
 
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name).sort()).toEqual(['list_accounts', 'list_mailboxes']);
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'get_message',
+      'list_accounts',
+      'list_mailboxes',
+      'list_messages'
+    ]);
   });
 });
