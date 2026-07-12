@@ -6,6 +6,13 @@ import type { ObjectStorageConfig } from '../utils/config/schema.js';
 const SAFE_FILENAME_RE = /[^A-Za-z0-9 ._-]/g;
 const MAX_FILENAME_LENGTH = 200;
 
+/** SigV4 request signing requires a region even against a non-AWS
+ * S3-compatible endpoint (MinIO, etc.) that doesn't use it for routing —
+ * the AWS SDK v3 throws "Region is missing" with no region resolvable from
+ * config/env. This placeholder keeps `region` genuinely optional in
+ * config.json for self-hosted endpoints, as documented. */
+const DEFAULT_REGION = 'us-east-1';
+
 /**
  * Filenames from IMAP/MIME headers are attacker-controlled (the sender
  * writes them) and must never be used as-is — this strips anything that
@@ -38,7 +45,7 @@ export type BlobStore = {
 
 export const createBlobStore = (config: ObjectStorageConfig): BlobStore => {
   const client = new S3Client({
-    region: config.region,
+    region: config.region ?? DEFAULT_REGION,
     endpoint: config.endpoint,
     forcePathStyle: config.forcePathStyle,
     credentials: {
