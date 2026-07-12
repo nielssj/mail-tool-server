@@ -266,12 +266,18 @@ connection error, unexpected error) through a tool and assert `isError` + a clea
 message and stable shape; no stack traces leak to the client.
 
 ### Task 7 — Docs
-**Status:** TODO
+**Status:** DONE
 **Description:** Document the MCP server in the README (and/or a dedicated doc):
 how to run it, an example Claude Desktop / Claude Code client config, and the
-tool list with parameters.
+tool list with parameters. New `docs/mcp-tools.md` is the full tool reference
+(every tool's parameters, output shape, error codes); README gets a new
+"MCP Server" section (transport, a compact tool summary table, client config
+for Claude Code/Desktop) plus the previously-undocumented `MCP_PORT`/
+`HTTP_ENABLED`/`MCP_ENABLED` env vars and an updated project layout.
 **Acceptance criteria:** A developer can connect an MCP client to the server and
-successfully call the tools using only the docs.
+successfully call the tools using only the docs. Verified directly: every
+curl command in `docs/mcp-tools.md` was run against a live server and its
+output matches what's documented byte-for-byte (not just written from memory).
 
 ---
 
