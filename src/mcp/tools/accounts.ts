@@ -56,7 +56,9 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
     {
       title: 'List mailboxes',
       description: 'List the IMAP mailboxes (folders) for an account.',
-      inputSchema: { accountId: z.string().min(1) },
+      inputSchema: {
+        accountId: z.string().min(1).describe('Account id, from list_accounts.')
+      },
       outputSchema: { mailboxes: z.array(MailboxSummarySchema) },
       annotations: { readOnlyHint: true }
     },

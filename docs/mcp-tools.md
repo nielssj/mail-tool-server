@@ -43,85 +43,129 @@ exception or stack trace:
 
 ## Tools
 
-`accountId` and `mailbox` are required on every tool below unless noted.
 `accountId` values come from `list_accounts`; mailbox paths (e.g. `"INBOX"`)
-come from `list_mailboxes`.
+come from `list_mailboxes`. `get_attachment`/`export_message` require
+[Object storage](../README.md#object-storage) configured. `move_message`/
+`set_flags` are disabled per-account by [`readOnly`](../README.md#configuration).
+
+The parameters, output shapes, and annotations below are generated directly
+from the tools themselves (each tool's `description`, zod schemas, and
+annotations) — see `scripts/mcpDocs.ts`. Run `npm run docs:mcp` after
+changing a tool to regenerate; `npm test` fails if this section drifts from
+the code.
+
+<!-- BEGIN GENERATED TOOLS: run `npm run docs:mcp` to regenerate -->
 
 ### `list_accounts`
 
-Read-only. Lists configured accounts. **Never** returns credentials.
+_Read-only._ List the configured mail accounts available to other tools, by id. Never includes credentials.
 
-- **Input:** none.
-- **Output:** `{ accounts: [{ id, host, watchMailboxes }] }`
+**Input:** none.
+
+**Output:** `{ accounts: { id: string, host: string, watchMailboxes: string[] }[] }`
 
 ### `list_mailboxes`
 
-Read-only. Lists the IMAP folders for an account.
+_Read-only._ List the IMAP mailboxes (folders) for an account.
 
-- **Input:** `accountId`.
-- **Output:** `{ mailboxes: [{ path, name, delimiter, flags, specialUse? }] }`
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+
+**Output:** `{ mailboxes: { path: string, name: string, delimiter: string, flags: string[], specialUse?: string }[] }`
 
 ### `list_messages`
 
-Read-only. Compact, paginated summaries — **never full bodies**. This is the
-cheap way to triage a mailbox before drilling into a specific message with
-`get_message`.
+_Read-only._ List messages in a mailbox as compact summaries (uid, subject, from, date, flags, snippet) — never full bodies. Use sinceUid to page incrementally.
 
-- **Input:** `accountId`, `mailbox`, `limit` (integer, 1–200, default 50),
-  `sinceUid` (integer, optional — page forward from this uid).
-- **Output:** `{ messages: [{ uid, subject?, from?, date?, flags, snippet }] }`.
-  `snippet` is a best-effort preview (raw bytes of the first MIME part,
-  undecoded) — for the real body, call `get_message`.
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+| `mailbox` | string | yes | Mailbox path, from list_mailboxes (e.g. "INBOX"). |
+| `limit` | number | no | Max messages to return. Default 50, hard max 200. |
+| `sinceUid` | number | no | Only return messages with a uid greater than this, for incremental paging. |
+
+**Output:** `{ messages: { uid: number, subject?: string, from?: string, date?: string, flags: string[], snippet: string }[] }`
 
 ### `get_message`
 
-Read-only. Envelope + body text for one message.
+_Read-only._ Get a single message's envelope and body text. Body is capped at 8000 characters; when truncated, use export_message to retrieve the full content. Attachment metadata only, never bytes.
 
-- **Input:** `accountId`, `mailbox`, `uid`.
-- **Output:** `{ uid, subject?, from?, date?, flags, body, truncated, attachments, hint? }`.
-  `body` is capped at **8000 characters**; when the real body is longer,
-  `truncated` is `true` and `hint` names `export_message` for the full
-  content. `attachments` is metadata only (`partId`, `filename?`, `mimeType`,
-  `sizeBytes?`) — never bytes.
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+| `mailbox` | string | yes | Mailbox path, from list_mailboxes (e.g. "INBOX"). |
+| `uid` | number | yes | Message UID, from list_messages. |
+
+**Output:** `{ uid: number, subject?: string, from?: string, date?: string, flags: string[], body: string, truncated: boolean, attachments: { partId: string, filename?: string, mimeType: string, sizeBytes?: number }[], hint?: string }`
 
 ### `get_attachment`
 
-Read-only. Stages one attachment's bytes into object storage and returns a
-short-lived download URL — never inlines bytes into the tool result.
-Requires `objectStorage` configured (see the README's
-[Object storage](../README.md#object-storage) section).
+_Read-only._ Fetch one message attachment's bytes (by uid + attachment part id) and stage them into object storage, returning a short-lived pre-signed download URL. Never returns bytes inline.
 
-- **Input:** `accountId`, `mailbox`, `uid`, `partId` (from `get_message`'s
-  `attachments[].partId`).
-- **Output:** `{ url, filename, mimeType, sizeBytes, expiresAt, hint }`. Fetch
-  `url` directly (e.g. a plain `GET`) to download the bytes; it expires at
-  `expiresAt`.
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+| `mailbox` | string | yes | Mailbox path, from list_mailboxes (e.g. "INBOX"). |
+| `uid` | number | yes | Message UID, from list_messages. |
+| `partId` | string | yes | Attachment part id, from get_message's attachments[].partId. |
+
+**Output:** `{ url: string, filename: string, mimeType: string, sizeBytes: number, expiresAt: string, hint: string }`
 
 ### `export_message`
 
-Read-only. Stages the full raw RFC822 message into object storage — use this
-when `get_message` reported `truncated: true`. Same requirement and output
-shape as `get_attachment`.
+_Read-only._ Stage the full raw RFC822 message into object storage and return a short-lived pre-signed download URL — use this when get_message truncated the body. Never returns bytes inline.
 
-- **Input:** `accountId`, `mailbox`, `uid`.
-- **Output:** `{ url, filename, mimeType, sizeBytes, expiresAt, hint }`.
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+| `mailbox` | string | yes | Mailbox path, from list_mailboxes (e.g. "INBOX"). |
+| `uid` | number | yes | Message UID, from list_messages. |
+
+**Output:** `{ url: string, filename: string, mimeType: string, sizeBytes: number, expiresAt: string, hint: string }`
 
 ### `move_message`
 
-**Destructive.** Moves a message to a different mailbox. Disabled
-(`READ_ONLY_ACCOUNT`) if the account has `readOnly: true`.
+_Destructive._ Move a message to a different mailbox (folder).
 
-- **Input:** `accountId`, `mailbox`, `uid`, `destination` (target mailbox path).
-- **Output:** `{ ok: true, destination }`.
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+| `mailbox` | string | yes | Mailbox path, from list_mailboxes (e.g. "INBOX"). |
+| `uid` | number | yes | Message UID, from list_messages. |
+| `destination` | string | yes | Target mailbox path to move the message into. |
+
+**Output:** `{ ok: boolean, destination: string }`
 
 ### `set_flags`
 
-**Idempotent.** Adds and/or removes IMAP flags (e.g. `\Seen`, `\Flagged`) on
-a message. Disabled (`READ_ONLY_ACCOUNT`) if the account has `readOnly: true`.
+_Idempotent._ Add and/or remove IMAP flags (e.g. \Seen, \Flagged) on a message.
 
-- **Input:** `accountId`, `mailbox`, `uid`, `add` (string array, default
-  `[]`), `remove` (string array, default `[]`).
-- **Output:** `{ ok: true }`.
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+| `mailbox` | string | yes | Mailbox path, from list_mailboxes (e.g. "INBOX"). |
+| `uid` | number | yes | Message UID, from list_messages. |
+| `add` | string[] | no (default: `[]`) | IMAP flags to add, e.g. ["\Flagged"]. |
+| `remove` | string[] | no (default: `[]`) | IMAP flags to remove, e.g. ["\Seen"]. |
+
+**Output:** `{ ok: boolean }`
+
+<!-- END GENERATED TOOLS -->
 
 ## Trying it with curl
 

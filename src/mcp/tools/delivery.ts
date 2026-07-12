@@ -54,10 +54,13 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       description:
         "Fetch one message attachment's bytes (by uid + attachment part id) and stage them into object storage, returning a short-lived pre-signed download URL. Never returns bytes inline.",
       inputSchema: {
-        accountId: z.string().min(1),
-        mailbox: z.string().min(1),
-        uid: z.number().int().positive(),
-        partId: z.string().min(1)
+        accountId: z.string().min(1).describe('Account id, from list_accounts.'),
+        mailbox: z.string().min(1).describe('Mailbox path, from list_mailboxes (e.g. "INBOX").'),
+        uid: z.number().int().positive().describe('Message UID, from list_messages.'),
+        partId: z
+          .string()
+          .min(1)
+          .describe("Attachment part id, from get_message's attachments[].partId.")
       },
       outputSchema: StagedBlobSchema,
       annotations: { readOnlyHint: true }
@@ -106,9 +109,9 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       description:
         'Stage the full raw RFC822 message into object storage and return a short-lived pre-signed download URL — use this when get_message truncated the body. Never returns bytes inline.',
       inputSchema: {
-        accountId: z.string().min(1),
-        mailbox: z.string().min(1),
-        uid: z.number().int().positive()
+        accountId: z.string().min(1).describe('Account id, from list_accounts.'),
+        mailbox: z.string().min(1).describe('Mailbox path, from list_mailboxes (e.g. "INBOX").'),
+        uid: z.number().int().positive().describe('Message UID, from list_messages.')
       },
       outputSchema: StagedBlobSchema,
       annotations: { readOnlyHint: true }

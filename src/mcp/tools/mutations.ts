@@ -36,10 +36,10 @@ export const registerMutationTools = (server: McpServer, options: MutationToolsO
       title: 'Move message',
       description: 'Move a message to a different mailbox (folder).',
       inputSchema: {
-        accountId: z.string().min(1),
-        mailbox: z.string().min(1),
-        uid: z.number().int().positive(),
-        destination: z.string().min(1)
+        accountId: z.string().min(1).describe('Account id, from list_accounts.'),
+        mailbox: z.string().min(1).describe('Mailbox path, from list_mailboxes (e.g. "INBOX").'),
+        uid: z.number().int().positive().describe('Message UID, from list_messages.'),
+        destination: z.string().min(1).describe('Target mailbox path to move the message into.')
       },
       outputSchema: {
         ok: z.boolean(),
@@ -67,11 +67,17 @@ export const registerMutationTools = (server: McpServer, options: MutationToolsO
       title: 'Set flags',
       description: 'Add and/or remove IMAP flags (e.g. \\Seen, \\Flagged) on a message.',
       inputSchema: {
-        accountId: z.string().min(1),
-        mailbox: z.string().min(1),
-        uid: z.number().int().positive(),
-        add: z.array(z.string().min(1)).default([]),
-        remove: z.array(z.string().min(1)).default([])
+        accountId: z.string().min(1).describe('Account id, from list_accounts.'),
+        mailbox: z.string().min(1).describe('Mailbox path, from list_mailboxes (e.g. "INBOX").'),
+        uid: z.number().int().positive().describe('Message UID, from list_messages.'),
+        add: z
+          .array(z.string().min(1))
+          .default([])
+          .describe('IMAP flags to add, e.g. ["\\Flagged"].'),
+        remove: z
+          .array(z.string().min(1))
+          .default([])
+          .describe('IMAP flags to remove, e.g. ["\\Seen"].')
       },
       outputSchema: {
         ok: z.boolean()

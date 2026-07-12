@@ -54,10 +54,21 @@ export const registerMessageTools = (server: McpServer, options: MessageToolsOpt
       description:
         'List messages in a mailbox as compact summaries (uid, subject, from, date, flags, snippet) — never full bodies. Use sinceUid to page incrementally.',
       inputSchema: {
-        accountId: z.string().min(1),
-        mailbox: z.string().min(1),
-        limit: z.number().int().positive().max(MAX_LIST_LIMIT).optional(),
-        sinceUid: z.number().int().positive().optional()
+        accountId: z.string().min(1).describe('Account id, from list_accounts.'),
+        mailbox: z.string().min(1).describe('Mailbox path, from list_mailboxes (e.g. "INBOX").'),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(MAX_LIST_LIMIT)
+          .optional()
+          .describe(`Max messages to return. Default ${DEFAULT_LIST_LIMIT}, hard max ${MAX_LIST_LIMIT}.`),
+        sinceUid: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Only return messages with a uid greater than this, for incremental paging.')
       },
       outputSchema: { messages: z.array(MessageSummarySchema) },
       annotations: { readOnlyHint: true }
@@ -84,9 +95,9 @@ export const registerMessageTools = (server: McpServer, options: MessageToolsOpt
       title: 'Get message',
       description: `Get a single message's envelope and body text. Body is capped at ${DEFAULT_BODY_CAP_CHARS} characters; when truncated, use export_message to retrieve the full content. Attachment metadata only, never bytes.`,
       inputSchema: {
-        accountId: z.string().min(1),
-        mailbox: z.string().min(1),
-        uid: z.number().int().positive()
+        accountId: z.string().min(1).describe('Account id, from list_accounts.'),
+        mailbox: z.string().min(1).describe('Mailbox path, from list_mailboxes (e.g. "INBOX").'),
+        uid: z.number().int().positive().describe('Message UID, from list_messages.')
       },
       outputSchema: {
         uid: z.number(),

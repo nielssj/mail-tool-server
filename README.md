@@ -143,6 +143,7 @@ Example (`config.example.json`):
 | `npm run dev`              | Start both interfaces with live TypeScript execution (`tsx`).      |
 | `npm run build`            | Compile TypeScript to `dist/`.                                     |
 | `npm start`                | Run the compiled server from `dist/` (run `build` first).          |
+| `npm run docs:mcp`         | Regenerate the tool reference in `docs/mcp-tools.md` from the live tools. See below. |
 | `npm run lint`             | Lint with ESLint.                                                 |
 | `npm test`                 | Run the unit test suite (no Docker/network).                       |
 | `npm run test:integration` | Run integration tests against a real IMAP server (requires Docker). See below. |
