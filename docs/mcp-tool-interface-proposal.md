@@ -31,14 +31,14 @@ src/
     blobStore.ts     stage a blob into S3-style object storage under a random
                      key, return a short-lived pre-signed GET URL (+ metadata)
   server.ts          single entrypoint: config -> services -> starts the HTTP
-                     API and the MCP stdio transport together in the same
-                     process, both on by default. Each interface is started
-                     by its own function (`startHttpServer` / `startMcpServer`)
-                     that exits early when disabled via env flag
-                     (`HTTP_ENABLED` / `MCP_ENABLED`), so server.ts itself
-                     stays free of branching. HTTP request logs move to
-                     stderr whenever the MCP transport is active, since
-                     stdout is reserved for MCP JSON-RPC framing.
+                     API (Fastify, PORT) and the MCP Streamable HTTP server
+                     (plain node:http, MCP_PORT) together in the same
+                     process on separate ports, both on by default. Each
+                     interface is started by its own function
+                     (`startHttpServer` / `startMcpServer`) that exits early
+                     when disabled via env flag (`HTTP_ENABLED` /
+                     `MCP_ENABLED`), so server.ts itself stays free of
+                     branching.
 ```
 
 ### Tools to expose
@@ -114,9 +114,17 @@ tool-call traces.
   actionable message (`Unknown account "x"`, `Could not connect to IMAP …`),
   rather than leaking stack traces. Same taxonomy as the HTTP error handler.
 
-- **Transport: stdio.** `createMcpServer` is transport-agnostic, but this plan
-  ships a single **stdio** entrypoint (`mcp-server.ts`). Additional transports
-  can be added later without touching tool code.
+- **Transport: Streamable HTTP, own port.** `createMcpServer` is
+  transport-agnostic; `src/mcp/httpServer.ts` wires it to the SDK's
+  `StreamableHTTPServerTransport` behind a plain `node:http` server on its
+  own port (`MCP_PORT`), separate from the HTTP API's Fastify instance.
+  Stdio was ruled out: its JSON-RPC framing needs exclusive ownership of
+  stdout, which conflicts with running the HTTP API's request logging in the
+  same process. Stateless mode (no `sessionIdGenerator`) is used since there
+  are no server-initiated streaming needs yet; a fresh `McpServer` +
+  transport pair is created per request, since one `Server` instance can only
+  be connected to one transport at a time. Additional transports can be added
+  later without touching tool code.
 
 - **Authentication is out of scope for the app.** The MCP server hands an agent
   full read/write access to real mailboxes using the credentials in
@@ -140,20 +148,23 @@ approval).
 **Status:** DONE
 **Description:** Add `@modelcontextprotocol/sdk`. Add `src/mcp/server.ts`
 exporting `createMcpServer({ mailboxService, accounts })` that returns a
-configured `McpServer` with **no tools yet**. Extend `src/server.ts` — the
-single existing entrypoint — to start both the HTTP API and the MCP stdio
-transport from the same config/services by default, each independently
-disableable via an env flag (`HTTP_ENABLED` / `MCP_ENABLED`, both default
-`true`) whose own startup function exits early when disabled, so `server.ts`
-itself stays free of branching. Route HTTP request logs to stderr whenever the
-MCP stdio transport is active, since stdout is reserved exclusively for MCP
-JSON-RPC framing.
+configured `McpServer` with **no tools yet**, and `src/mcp/httpServer.ts`
+exporting `createMcpHttpServer({ mailboxService, accounts })`, a plain
+`node:http` server that serves `POST /mcp` via the SDK's
+`StreamableHTTPServerTransport` in stateless mode (a fresh `McpServer` +
+transport pair per request). Extend `src/server.ts` — the single existing
+entrypoint — to start both the HTTP API (Fastify, `PORT`) and the MCP HTTP
+server (`MCP_PORT`) from the same config/services by default, each
+independently disableable via an env flag (`HTTP_ENABLED` / `MCP_ENABLED`,
+both default `true`) whose own startup function exits early when disabled, so
+`server.ts` itself stays free of branching.
 **Acceptance criteria:** `createMcpServer` returns a server that responds to
-`initialize` and `tools/list` (empty) over the SDK in-memory transport in a unit
-test; running `npm run dev` (or `npm start`) brings up the HTTP API and an MCP
-client can connect over the same process's stdio; setting `HTTP_ENABLED=false`
-or `MCP_ENABLED=false` disables the respective interface; existing HTTP suite
-still passes.
+`initialize` and `tools/list` (empty) over the SDK in-memory transport in a
+unit test; `createMcpHttpServer` responds to the same over a real HTTP
+connection using the SDK's `StreamableHTTPClientTransport`; running `npm run
+dev` (or `npm start`) brings up both the HTTP API and the MCP HTTP server on
+separate ports; setting `HTTP_ENABLED=false` or `MCP_ENABLED=false` disables
+the respective interface; existing HTTP suite still passes.
 
 ### Task 2 — Discovery tools: `list_accounts`, `list_mailboxes`
 **Status:** TODO
@@ -241,7 +252,10 @@ successfully call the tools using only the docs.
 3. **Body/export format** — **raw is preferred**: `get_message` returns the
    `text/plain` part (or raw body as-is, no HTML rendering), and `export_message`
    delivers raw RFC822. No rendered-text export variant.
-4. **Transport** — **stdio only** for now.
+4. **Transport** — **Streamable HTTP, on its own port**, separate from the
+   HTTP API's Fastify instance, in stateless mode. (Originally planned as
+   stdio; revised after stdio's stdout-only JSON-RPC framing proved
+   incompatible with running HTTP request logging in the same process.)
 5. **Tools vs resources** — **tools only**; no MCP resources for now.
 6. **Authentication** — handled by external infrastructure at deploy time; the
    application implements no auth.

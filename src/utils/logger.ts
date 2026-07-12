@@ -14,23 +14,14 @@ export const createLogger = (
     level: config.level ?? process.env.LOG_LEVEL ?? 'info'
   };
 
-  const usePrettyPrint =
-    options.level !== 'silent' && (env === 'development' || env === 'test');
-
-  if (usePrettyPrint) {
-    // pino-pretty runs in a worker thread, so it can only target a file
-    // descriptor/path, not an arbitrary JS stream instance — fd 2 (stderr)
-    // is the one case callers in this codebase need (keeping stdout clear
-    // for the MCP stdio transport), so that's the only override supported.
+  if (options.level !== 'silent' && (env === 'development' || env === 'test')) {
     options.transport = {
       target: 'pino-pretty',
       options: {
         colorize: false,
-        translateTime: 'SYS:standard',
-        destination: destination === process.stderr ? 2 : 1
+        translateTime: 'SYS:standard'
       }
     };
-    return pino(options);
   }
 
   return destination ? pino(options, destination) : pino(options);

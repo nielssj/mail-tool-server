@@ -1,7 +1,6 @@
 import Fastify from 'fastify';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import type { DestinationStream } from 'pino';
 import { createLogger, type LoggerConfig } from './utils/logger.js';
 import type { AccountWatcher } from './imap/watcher.js';
 import type { MailboxService } from './services/mailboxService.js';
@@ -10,17 +9,13 @@ import { errorHandler } from './api/errorHandler.js';
 
 export type BuildAppOptions = {
   loggerConfig?: LoggerConfig;
-  /** Where HTTP request logs go. Pass `process.stderr` when stdout must stay
-   * reserved for another protocol sharing this process (e.g. the MCP stdio
-   * transport). */
-  logDestination?: DestinationStream;
   watchers?: AccountWatcher[];
   mailboxService?: MailboxService;
 };
 
 export const buildApp = async (options: BuildAppOptions = {}) => {
   const app = Fastify({
-    loggerInstance: createLogger(options.loggerConfig, options.logDestination)
+    loggerInstance: createLogger(options.loggerConfig)
   });
 
   app.setErrorHandler(errorHandler);

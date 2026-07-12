@@ -1,0 +1,71 @@
+import type { AddressInfo } from 'node:net';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { createMcpHttpServer } from '../src/mcp/httpServer.js';
+import type { MailboxService } from '../src/services/mailboxService.js';
+import type { AccountConfig } from '../src/utils/config/schema.js';
+
+const ACCOUNTS: AccountConfig[] = [
+  {
+    id: 'acc-1',
+    host: 'imap.example.com',
+    port: 993,
+    secure: true,
+    auth: { user: 'user@example.com', pass: 'secret' },
+    watchMailboxes: ['INBOX'],
+    dispatchers: []
+  }
+];
+
+const makeMailboxService = (): MailboxService => ({
+  listMailboxes: async () => [],
+  listMessages: async () => [],
+  getMessage: async () => false,
+  moveMessage: async () => false,
+  setFlags: async () => undefined
+});
+
+describe('createMcpHttpServer', () => {
+  let server: ReturnType<typeof createMcpHttpServer>;
+  let baseUrl: URL;
+  let client: Client | undefined;
+
+  beforeEach(async () => {
+    server = createMcpHttpServer({
+      mailboxService: makeMailboxService(),
+      accounts: ACCOUNTS
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as AddressInfo;
+    baseUrl = new URL(`http://127.0.0.1:${address.port}/mcp`);
+  });
+
+  afterEach(async () => {
+    await client?.close();
+    client = undefined;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('responds to initialize and returns an empty tools/list over Streamable HTTP', async () => {
+    client = new Client({ name: 'test-client', version: '0.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(baseUrl));
+
+    const serverVersion = client.getServerVersion();
+    expect(serverVersion?.name).toBe('mail-tool-server');
+
+    const { tools } = await client.listTools();
+    expect(tools).toEqual([]);
+  });
+
+  it('returns 404 for unknown paths', async () => {
+    const response = await fetch(new URL('/not-mcp', baseUrl));
+    expect(response.status).toBe(404);
+  });
+
+  it('returns 405 for GET /mcp (no session support in stateless mode)', async () => {
+    const response = await fetch(baseUrl, { method: 'GET' });
+    expect(response.status).toBe(405);
+  });
+});

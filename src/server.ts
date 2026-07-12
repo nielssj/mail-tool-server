@@ -1,19 +1,22 @@
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { Server as HttpServer } from 'node:http';
 import { buildApp } from './app.js';
 import { loadConfig } from './utils/config/load.js';
+import { createLogger } from './utils/logger.js';
 import { AccountWatcher } from './imap/watcher.js';
 import { createDispatcher, subscribeWatcher } from './events/dispatcher.js';
 import { createMailboxService, type MailboxService } from './services/mailboxService.js';
-import { createMcpServer } from './mcp/server.js';
+import { createMcpHttpServer } from './mcp/httpServer.js';
 import type { AccountConfig } from './utils/config/schema.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3000);
+const mcpPort = Number(process.env.MCP_PORT ?? 3001);
 const httpEnabled = process.env.HTTP_ENABLED !== 'false';
 const mcpEnabled = process.env.MCP_ENABLED !== 'false';
 
+const logger = createLogger();
+
 type HttpApp = Awaited<ReturnType<typeof buildApp>>;
-type McpServerInstance = ReturnType<typeof createMcpServer>;
 
 const startHttpServer = async (
   watchers: AccountWatcher[],
@@ -23,15 +26,7 @@ const startHttpServer = async (
     return undefined;
   }
 
-  const app = await buildApp({
-    watchers,
-    mailboxService,
-    // HTTP request logs must stay off stdout whenever the MCP stdio
-    // transport shares this process, since stdout is reserved for MCP
-    // JSON-RPC framing.
-    logDestination: mcpEnabled ? process.stderr : undefined
-  });
-
+  const app = await buildApp({ watchers, mailboxService });
   await app.listen({ host, port });
   return app;
 };
@@ -39,16 +34,25 @@ const startHttpServer = async (
 const startMcpServer = async (
   accounts: AccountConfig[],
   mailboxService: MailboxService
-): Promise<McpServerInstance | undefined> => {
+): Promise<HttpServer | undefined> => {
   if (!mcpEnabled) {
     return undefined;
   }
 
-  const server = createMcpServer({ mailboxService, accounts });
-  await server.connect(new StdioServerTransport());
-  process.stderr.write('MCP server connected via stdio\n');
+  const server = createMcpHttpServer({ mailboxService, accounts });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(mcpPort, host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  logger.info(`MCP server listening at http://${host}:${mcpPort}/mcp`);
   return server;
 };
+
+const closeMcpServer = (server: HttpServer): Promise<void> =>
+  new Promise((resolve) => server.close(() => resolve()));
 
 const start = async (): Promise<void> => {
   const config = loadConfig();
@@ -64,11 +68,15 @@ const start = async (): Promise<void> => {
   }
 
   let app: HttpApp | undefined;
-  let mcpServer: McpServerInstance | undefined;
+  let mcpServer: HttpServer | undefined;
 
   const shutdown = async (signal: string): Promise<void> => {
-    process.stderr.write(`Received ${signal}, shutting down...\n`);
-    await Promise.all([app?.close(), mcpServer?.close(), ...watchers.map((w) => w.stop())]);
+    logger.info(`Received ${signal}, shutting down...`);
+    await Promise.all([
+      app?.close(),
+      mcpServer ? closeMcpServer(mcpServer) : undefined,
+      ...watchers.map((w) => w.stop())
+    ]);
     process.exit(0);
   };
 
@@ -82,7 +90,7 @@ const start = async (): Promise<void> => {
       startMcpServer(config, mailboxService)
     ]);
   } catch (error) {
-    process.stderr.write(`Failed to start server: ${(error as Error).message}\n`);
+    logger.error(error, 'Failed to start server');
     process.exit(1);
   }
 };
