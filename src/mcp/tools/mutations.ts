@@ -1,9 +1,25 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../../services/mailboxService.js';
+import { NotFoundError, withToolErrors } from '../errors.js';
 
 export type MutationToolsOptions = {
   mailboxService: MailboxService;
+};
+
+type MoveMessageArgs = {
+  accountId: string;
+  mailbox: string;
+  uid: number;
+  destination: string;
+};
+
+type SetFlagsArgs = {
+  accountId: string;
+  mailbox: string;
+  uid: number;
+  add: string[];
+  remove: string[];
 };
 
 /**
@@ -31,18 +47,18 @@ export const registerMutationTools = (server: McpServer, options: MutationToolsO
       },
       annotations: { destructiveHint: true }
     },
-    async ({ accountId, mailbox, uid, destination }) => {
+    withToolErrors(async ({ accountId, mailbox, uid, destination }: MoveMessageArgs) => {
       const moved = await options.mailboxService.moveMessage(accountId, mailbox, uid, destination);
       if (!moved) {
-        throw new Error(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
+        throw new NotFoundError(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
       }
 
       const result = { ok: true, destination };
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+        content: [{ type: 'text' as const, text: `Moved message ${uid} to "${destination}".` }],
         structuredContent: result
       };
-    }
+    })
   );
 
   server.registerTool(
@@ -62,14 +78,14 @@ export const registerMutationTools = (server: McpServer, options: MutationToolsO
       },
       annotations: { idempotentHint: true }
     },
-    async ({ accountId, mailbox, uid, add, remove }) => {
+    withToolErrors(async ({ accountId, mailbox, uid, add, remove }: SetFlagsArgs) => {
       await options.mailboxService.setFlags(accountId, mailbox, uid, add, remove);
 
       const result = { ok: true };
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+        content: [{ type: 'text' as const, text: `Updated flags for message ${uid}.` }],
         structuredContent: result
       };
-    }
+    })
   );
 };

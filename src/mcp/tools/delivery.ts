@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../../services/mailboxService.js';
-import { sanitizeFilename, type BlobStore } from '../../storage/blobStore.js';
+import { sanitizeFilename, ObjectStorageNotConfiguredError, type BlobStore } from '../../storage/blobStore.js';
+import { NotFoundError, withToolErrors } from '../errors.js';
 
 export type DeliveryToolsOptions = {
   mailboxService: MailboxService;
@@ -19,14 +20,25 @@ const StagedBlobSchema = {
 
 const requireBlobStore = (blobStore: BlobStore | undefined): BlobStore => {
   if (!blobStore) {
-    throw new Error(
-      'Object storage is not configured (config.json has no "objectStorage" block); this tool is unavailable.'
-    );
+    throw new ObjectStorageNotConfiguredError();
   }
   return blobStore;
 };
 
 const DOWNLOAD_HINT = 'Download the bytes directly from this URL — it expires at expiresAt.';
+
+type GetAttachmentArgs = {
+  accountId: string;
+  mailbox: string;
+  uid: number;
+  partId: string;
+};
+
+type ExportMessageArgs = {
+  accountId: string;
+  mailbox: string;
+  uid: number;
+};
 
 /**
  * Registers the two large-payload tools: `get_attachment` and
@@ -50,11 +62,13 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       outputSchema: StagedBlobSchema,
       annotations: { readOnlyHint: true }
     },
-    async ({ accountId, mailbox, uid, partId }) => {
+    withToolErrors(async ({ accountId, mailbox, uid, partId }: GetAttachmentArgs) => {
       const blobStore = requireBlobStore(options.blobStore);
       const attachment = await options.mailboxService.getAttachment(accountId, mailbox, uid, partId);
       if (!attachment) {
-        throw new Error(`Attachment not found: uid ${uid}, part "${partId}" in mailbox "${mailbox}"`);
+        throw new NotFoundError(
+          `Attachment not found: uid ${uid}, part "${partId}" in mailbox "${mailbox}"`
+        );
       }
 
       const filename = sanitizeFilename(attachment.filename, `attachment-${partId}`);
@@ -74,10 +88,15 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       };
 
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+        content: [
+          {
+            type: 'text' as const,
+            text: `Staged "${filename}" (${attachment.mimeType}, ${attachment.sizeBytes} bytes). Expires ${staged.expiresAt}.`
+          }
+        ],
         structuredContent: result
       };
-    }
+    })
   );
 
   server.registerTool(
@@ -94,11 +113,11 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       outputSchema: StagedBlobSchema,
       annotations: { readOnlyHint: true }
     },
-    async ({ accountId, mailbox, uid }) => {
+    withToolErrors(async ({ accountId, mailbox, uid }: ExportMessageArgs) => {
       const blobStore = requireBlobStore(options.blobStore);
       const source = await options.mailboxService.getRawSource(accountId, mailbox, uid);
       if (!source) {
-        throw new Error(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
+        throw new NotFoundError(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
       }
 
       const filename = sanitizeFilename(undefined, `message-${uid}.eml`);
@@ -118,9 +137,14 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       };
 
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+        content: [
+          {
+            type: 'text' as const,
+            text: `Staged message ${uid} as "${filename}". Expires ${staged.expiresAt}.`
+          }
+        ],
         structuredContent: result
       };
-    }
+    })
   );
 };

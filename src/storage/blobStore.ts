@@ -3,6 +3,15 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { ObjectStorageConfig } from '../utils/config/schema.js';
 
+export class ObjectStorageNotConfiguredError extends Error {
+  constructor() {
+    super(
+      'Object storage is not configured (config.json has no "objectStorage" block); this tool is unavailable.'
+    );
+    this.name = 'ObjectStorageNotConfiguredError';
+  }
+}
+
 const SAFE_FILENAME_RE = /[^A-Za-z0-9 ._-]/g;
 const MAX_FILENAME_LENGTH = 200;
 
