@@ -30,11 +30,15 @@ src/
   storage/
     blobStore.ts     stage a blob into S3-style object storage under a random
                      key, return a short-lived pre-signed GET URL (+ metadata)
-  bootstrap.ts       (new) buildServices(config) -> { mailboxService, watchers, blobStore }
-                     shared by server.ts and mcp-server.ts (removes duplication)
-  mcp-server.ts      stdio entrypoint: config -> services -> createMcpServer
-                     -> StdioServerTransport
-  server.ts          (existing HTTP entrypoint, refactored to use bootstrap.ts)
+  server.ts          single entrypoint: config -> services -> starts the HTTP
+                     API and the MCP stdio transport together in the same
+                     process, both on by default. Each interface is started
+                     by its own function (`startHttpServer` / `startMcpServer`)
+                     that exits early when disabled via env flag
+                     (`HTTP_ENABLED` / `MCP_ENABLED`), so server.ts itself
+                     stays free of branching. HTTP request logs move to
+                     stderr whenever the MCP transport is active, since
+                     stdout is reserved for MCP JSON-RPC framing.
 ```
 
 ### Tools to expose
@@ -134,17 +138,22 @@ approval).
 
 ### Task 1 — MCP scaffolding + shared service bootstrap
 **Status:** DONE
-**Description:** Add `@modelcontextprotocol/sdk`. Extract a `buildServices(config)`
-helper (`src/bootstrap.ts`) that constructs the `mailboxService` (and watchers),
-and refactor `server.ts` to use it. Add `src/mcp/server.ts` exporting
-`createMcpServer({ mailboxService, accounts })` that returns a configured
-`McpServer` with **no tools yet**, and `src/mcp-server.ts` wiring
-config → services → `createMcpServer` → `StdioServerTransport`. Add `mcp` /
-`mcp:dev` npm scripts.
+**Description:** Add `@modelcontextprotocol/sdk`. Add `src/mcp/server.ts`
+exporting `createMcpServer({ mailboxService, accounts })` that returns a
+configured `McpServer` with **no tools yet**. Extend `src/server.ts` — the
+single existing entrypoint — to start both the HTTP API and the MCP stdio
+transport from the same config/services by default, each independently
+disableable via an env flag (`HTTP_ENABLED` / `MCP_ENABLED`, both default
+`true`) whose own startup function exits early when disabled, so `server.ts`
+itself stays free of branching. Route HTTP request logs to stderr whenever the
+MCP stdio transport is active, since stdout is reserved exclusively for MCP
+JSON-RPC framing.
 **Acceptance criteria:** `createMcpServer` returns a server that responds to
 `initialize` and `tools/list` (empty) over the SDK in-memory transport in a unit
-test; `npm run mcp` starts a stdio server that a client can connect to; existing
-HTTP suite still passes after the `bootstrap.ts` refactor.
+test; running `npm run dev` (or `npm start`) brings up the HTTP API and an MCP
+client can connect over the same process's stdio; setting `HTTP_ENABLED=false`
+or `MCP_ENABLED=false` disables the respective interface; existing HTTP suite
+still passes.
 
 ### Task 2 — Discovery tools: `list_accounts`, `list_mailboxes`
 **Status:** TODO
