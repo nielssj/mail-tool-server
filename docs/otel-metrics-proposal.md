@@ -208,6 +208,7 @@ round-trips correctly; `npm run build`/`npm test` unaffected otherwise (no
 call sites changed yet).
 
 #### Task 2 — Mailbox service / IMAP connection metrics
+**Status:** DONE
 **Description:** Extend `mailboxService`'s `withClient` helper to record
 `mailtool.imap.connection.duration`/`mailtool.imap.connection.errors`, and
 wrap each of the seven service methods to record
