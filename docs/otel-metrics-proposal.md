@@ -1,11 +1,12 @@
 ## OpenTelemetry Metrics — High-Level Solution Proposal
 
 **Goal:** Instrument the server to emit OpenTelemetry (OTel) metrics — both
-generic operational metrics (HTTP/MCP request health, IMAP connection
-behavior) and domain-specific metrics (mail events, mailbox operations,
-dispatch/export activity) — so that whatever platform we later choose to
-collect and visualize metrics on can be wired up without touching this
-instrumentation again.
+generic operational metrics (MCP request health, IMAP connection behavior)
+and domain-specific metrics (mail events, mailbox operations, dispatch/export
+activity) — so that whatever platform we later choose to collect and
+visualize metrics on can be wired up without touching this instrumentation
+again. Generic HTTP request/latency/error metrics for the plain HTTP API are
+intentionally excluded — see below.
 
 **Explicitly out of scope for this proposal:**
 - Choosing/configuring a metrics backend (Prometheus, Datadog, Grafana Cloud,
@@ -14,6 +15,12 @@ instrumentation again.
 - Traces and logs-as-signals. The instrumentation seams introduced here would
   make adding OTel tracing straightforward later (same call sites), but this
   pass is metrics-only.
+- **Generic HTTP request-rate/latency/error-rate (RED) metrics for the plain
+  HTTP API.** The cluster's Traefik ingress already emits OTel-semantic-
+  convention-aligned HTTP metrics at the edge (entrypoint/router/service
+  level) for every request it proxies, so instrumenting the same signal again
+  in-process would be redundant. See "Generic HTTP metrics are delegated to
+  the Traefik ingress" below for exactly what this does and doesn't cover.
 
 ### Stack additions
 
@@ -47,10 +54,6 @@ src/
                       and named — call sites import the instrument, they
                       never call meter.createXxx() inline. Prevents drift
                       in naming/units/attribute keys across call sites.
-  api/
-    metricsPlugin.ts  Fastify plugin: onRequest/onResponse/onError hooks
-                      record HTTP server metrics using route templates
-                      (never raw URLs).
   services/mailboxService.ts   wraps each operation + the shared IMAP
                                 connection helper to record operation and
                                 connection metrics.
@@ -91,32 +94,50 @@ inside it.
   callers." Adding a new metric means adding one entry here and importing it
   where needed.
 
-- **Follow OTel semantic conventions for generic HTTP metrics, use a
-  project-specific `mailtool.*` namespace for everything domain-specific.**
-  `http.server.request.duration` / `http.server.active_requests` (with
-  `http.request.method`, `http.route`, `http.response.status_code`
-  attributes) are the standard OTel HTTP server metric names — using them
-  means any OTel-aware dashboard/alert convention (e.g. a generic "API
-  latency" dashboard) works out of the box. Domain metrics get an explicit
-  `mailtool.` prefix (e.g. `mailtool.watcher.events`,
-  `mailtool.mailbox.operation.duration`) so they're never confused with
-  semconv-defined names and don't collide with metrics another
-  instrumentation library might add later (e.g. Node runtime
-  auto-instrumentation).
+- **Generic HTTP metrics are delegated to the Traefik ingress, not
+  instrumented in-app.** Traefik v3 natively emits OTel-semantic-convention-
+  aligned HTTP metrics (`entrypoint.request.duration`, `router.request.duration`,
+  `service.request.duration`, carrying `code`/`method` and, with
+  `addRoutersLabels` enabled, per-router labels) for every request it
+  proxies. Duplicating that in-process via Fastify `onRequest`/`onResponse`
+  hooks would be redundant edge-and-app double bookkeeping for a signal
+  that's already available for free at the edge — so this plan carries no
+  `api/metricsPlugin.ts` and no `http.server.*` instruments. Two things this
+  deliberately does *not* cover, both still handled elsewhere in this plan:
+  1. **MCP tool calls.** Traefik sees `POST /mcp` as one flat route and
+     can't see inside the JSON-RPC body — it can't distinguish
+     `list_messages` from `move_message`, or a tool-level `isError: true`
+     result (still an HTTP 200) from a genuine success. `mailtool.mcp.tool.duration`
+     (still instrumented in-app, see catalog below) is the only place that
+     breakdown can come from.
+  2. **Traffic that bypasses the ingress.** If anything ever calls the
+     Service directly inside the cluster (skipping Traefik), that traffic is
+     invisible to edge metrics. This plan assumes all HTTP API traffic flows
+     through Traefik; worth confirming that holds for this deployment.
+
+  `mailtool.mailbox.operation.duration` (below) remains the app-side
+  complement either way — it's scoped to logical operation and tagged by
+  `outcome` (not just HTTP status), giving a clean split: Traefik owns
+  edge/transport health, this app owns logical-operation health.
+
+- **Domain metrics use a project-specific `mailtool.*` namespace.** This
+  keeps them clearly distinct from anything an infrastructure-level
+  instrumentation source (Traefik, a future Node runtime
+  auto-instrumentation package, etc.) might emit, and avoids any naming
+  collision if generic OTel semantic-convention metrics are ever added
+  in-app later.
 
 - **Bounded-cardinality attributes only — no message UIDs, filenames,
   webhook URLs, or arbitrary caller-supplied mailbox paths as metric
-  attributes.** `accountId` is safe (bounded by `config.json`). HTTP route is
-  the Fastify *route template* (e.g.
-  `/accounts/:accountId/mailboxes/:mailbox/messages/:uid`), never
-  `request.url`. MCP tool name is safe (bounded, ~8 tools). Mailbox path is
-  only used as an attribute on **watcher**-sourced metrics, where the set is
-  bounded by each account's configured `watchMailboxes` — it is deliberately
-  **not** attached to per-request `mailtool.mailbox.operation.duration`
-  metrics, since HTTP/MCP callers can pass arbitrary folder paths
-  (`Archive/2024/Q3/...`) and that would let an external caller blow up
-  attribute cardinality. Destination mailbox on `move_message` is recorded
-  in logs, not as a metric attribute, for the same reason.
+  attributes.** `accountId` is safe (bounded by `config.json`). MCP tool name
+  is safe (bounded, ~8 tools). Mailbox path is only used as an attribute on
+  **watcher**-sourced metrics, where the set is bounded by each account's
+  configured `watchMailboxes` — it is deliberately **not** attached to
+  per-request `mailtool.mailbox.operation.duration` metrics, since HTTP/MCP
+  callers can pass arbitrary folder paths (`Archive/2024/Q3/...`) and that
+  would let an external caller blow up attribute cardinality. Destination
+  mailbox on `move_message` is recorded in logs, not as a metric attribute,
+  for the same reason.
 
 - **Prefer one histogram with an `outcome` attribute over a family of
   single-purpose counters.** E.g. `mailtool.mailbox.operation.duration` is
@@ -154,12 +175,14 @@ inside it.
 
 | Name | Type | Unit | Attributes | Source |
 | --- | --- | --- | --- | --- |
-| `http.server.request.duration` | Histogram | s | `http.request.method`, `http.route`, `http.response.status_code` | Fastify `metricsPlugin.ts` |
-| `http.server.active_requests` | UpDownCounter | {request} | `http.request.method`, `http.route` | Fastify `metricsPlugin.ts` |
 | `mailtool.mcp.request.duration` | Histogram | s | `outcome` (`ok`\|`error`) | `mcp/httpServer.ts` (`POST /mcp`, transport-level) |
 | `mailtool.mcp.tool.duration` | Histogram | s | `tool`, `outcome` (`ok`\|error code from `errors.ts`) | `mcp/errors.ts` wrapper |
 | `mailtool.imap.connection.duration` | Histogram | s | `account.id`, `outcome` (`ok`\|`error`) | `mailboxService`'s `withClient` |
 | `mailtool.imap.connection.errors` | Counter | {error} | `account.id` | `mailboxService`'s `withClient` |
+
+Generic HTTP request-rate/latency/error metrics for the plain HTTP API are
+intentionally *not* duplicated here — see "Generic HTTP metrics are
+delegated to the Traefik ingress" above.
 
 **Domain-specific**
 
@@ -200,20 +223,7 @@ claim); a unit test using the in-memory test harness asserts a recorded value
 round-trips correctly; `npm run build`/`npm test` unaffected otherwise (no
 call sites changed yet).
 
-#### Task 2 — HTTP API metrics
-**Description:** `src/api/metricsPlugin.ts` — a Fastify plugin using
-`onRequest` (start timer, increment active requests), `onResponse` (record
-duration + status, decrement active requests), and `onError`. Uses
-`request.routeOptions.url` (the route template) for the `http.route`
-attribute, never `request.url`. Registered in `app.ts` alongside the
-existing error handler.
-**Acceptance criteria:** Unit tests via `fastify.inject()` against the
-in-memory test harness assert `http.server.request.duration` is recorded
-with correct `http.route`/`http.request.method`/`http.response.status_code`
-for a 200 and a 404 route, and that `http.server.active_requests` returns to
-0 after each request completes (including on error).
-
-#### Task 3 — Mailbox service / IMAP connection metrics
+#### Task 2 — Mailbox service / IMAP connection metrics
 **Description:** Extend `mailboxService`'s `withClient` helper to record
 `mailtool.imap.connection.duration`/`mailtool.imap.connection.errors`, and
 wrap each of the seven service methods to record
@@ -228,7 +238,7 @@ correct `operation`/`surface`/`outcome` for a success case, a not-found case,
 and a thrown-error case; connection metrics recorded on both connect success
 and `ImapConnectionError`.
 
-#### Task 4 — Watcher domain metrics
+#### Task 3 — Watcher domain metrics
 **Description:** In `imap/watcher.ts`, record `mailtool.watcher.events` and
 `mailtool.watcher.new_mail.messages` inside `handleExists`/`handleFlags`/
 `handleExpunge`; record `mailtool.watcher.reconnects` in
@@ -245,7 +255,7 @@ increments the reconnect counter; the observable gauges report the expected
 connection state and message count when read via the in-memory test harness,
 for multiple concurrent watcher instances.
 
-#### Task 5 — Dispatcher + blob store metrics
+#### Task 4 — Dispatcher + blob store metrics
 **Description:** `webhookDispatcher.ts`'s `postWithRetry` records
 `mailtool.dispatcher.webhook.duration` and `.attempts` per call (final
 outcome after retries, plus an attempt count). `storage/blobStore.ts`'s
@@ -258,7 +268,7 @@ first-try success, retry-then-success, and exhausted-retries failure for the
 webhook dispatcher; blob store test asserts byte size and `kind` recorded
 correctly for both an attachment and a full-message stage call.
 
-#### Task 6 — MCP tool + transport metrics
+#### Task 5 — MCP tool + transport metrics
 **Description:** Extend (or add a sibling to) `mcp/errors.ts`'s
 `withToolErrors` to also record `mailtool.mcp.tool.duration` with `tool`
 (passed in at registration, since the wrapper doesn't otherwise know the
@@ -271,19 +281,22 @@ histogram with correct `tool`/`outcome` for a success and at least one error
 case; an HTTP-level test asserts `mailtool.mcp.request.duration` is recorded
 for a real `POST /mcp` call.
 
-#### Task 7 — Docs
+#### Task 6 — Docs
 **Description:** New `docs/metrics.md`: the full metrics catalog (name,
 type, unit, attributes, description, source) as the authoritative reference
 for whoever configures collection — effectively the "what you can scrape"
-contract. README gets a short "Metrics" section: what's emitted, the
-no-op-by-default behavior, and a pointer to `docs/metrics.md` plus a one-line
-example of registering a `MeterProvider` (e.g. via an OTLP exporter) to
-actually collect them, explicitly marked as illustrative/deploy-time, not
-part of the running server.
+contract. Explicitly notes that generic HTTP RED metrics are sourced from
+the Traefik ingress, not this service, and points at Traefik's own metrics
+docs for that half of the picture. README gets a short "Metrics" section:
+what's emitted, the no-op-by-default behavior, and a pointer to
+`docs/metrics.md` plus a one-line example of registering a `MeterProvider`
+(e.g. via an OTLP exporter) to actually collect them, explicitly marked as
+illustrative/deploy-time, not part of the running server.
 **Acceptance criteria:** `docs/metrics.md` lists every instrument from Tasks
-1–6 with correct final attribute names (kept in sync with what actually
+1–5 with correct final attribute names (kept in sync with what actually
 shipped, not just this proposal's draft names); a developer can read it and
-know exactly what to expect from a scrape without reading source.
+know exactly what to expect from a scrape without reading source, and knows
+where to look (Traefik) for what's deliberately absent.
 
 ---
 
@@ -292,7 +305,7 @@ know exactly what to expect from a scrape without reading source.
 1. **Namespace prefix** — `mailtool.` proposed for domain metrics. Any
    preference for a different prefix (e.g. matching an org-wide convention
    you already use elsewhere)?
-2. **`surface` attribute threading (Task 3)** — adding an options-object
+2. **`surface` attribute threading (Task 2)** — adding an options-object
    parameter to `mailboxService` methods is the smallest change I could find,
    but it does touch every HTTP route and MCP tool call site to pass
    `surface`. Acceptable, or would you rather infer/omit it (e.g. drop the
@@ -314,3 +327,8 @@ know exactly what to expect from a scrape without reading source.
 5. **Scope confirmation** — metrics only, no tracing, in this pass (tracing
    would reuse the same seams later). Confirm that's the intent before I
    scope Task 1 around metrics-only dependencies.
+6. **Traefik metrics enablement** — outside this repo, but worth confirming
+   before relying on it: that Traefik's metrics (OTel or Prometheus export)
+   are actually enabled and scraped for this service's route(s), and whether
+   `addRoutersLabels` / per-path IngressRoutes are worth configuring for
+   route-level granularity, or a single flat per-service view is acceptable.
