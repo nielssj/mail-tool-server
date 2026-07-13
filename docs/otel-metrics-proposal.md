@@ -190,6 +190,7 @@ with the existing workflow (implement, mark `Status: DONE` here, open PR,
 await approval).
 
 #### Task 1 — Telemetry scaffolding
+**Status:** DONE
 **Description:** Add `@opentelemetry/api` (prod) and `@opentelemetry/sdk-metrics`
 (dev-only, for tests) dependencies. Add `src/telemetry/metrics.ts`
 (`getMeter(name: string): Meter`, thin wrapper over the global API) and
