@@ -10,11 +10,8 @@ import type {
 } from 'imapflow';
 import type { AccountConfig } from '../utils/config/schema.js';
 import { ImapConnectionError } from '../imap/clientFactory.js';
-import {
-  imapConnectionDuration,
-  imapConnectionErrors,
-  mailboxOperationDuration
-} from '../telemetry/instruments.js';
+import * as telemetry from '../telemetry/instruments.js';
+import { recordMailboxOperation } from '../telemetry/mailboxOperationMetrics.js';
 
 export type { ListResponse, FetchMessageObject };
 
@@ -210,17 +207,17 @@ const withClient = async <T>(
   try {
     await client.connect();
   } catch (error) {
-    imapConnectionDuration.record((performance.now() - connectStart) / 1000, {
+    telemetry.imapConnectionDuration.record((performance.now() - connectStart) / 1000, {
       'account.id': account.id,
       outcome: 'error'
     });
-    imapConnectionErrors.add(1, { 'account.id': account.id });
+    telemetry.imapConnectionErrors.add(1, { 'account.id': account.id });
     throw new ImapConnectionError(
       `Failed to connect to IMAP account "${account.id}"`,
       { cause: error as Error }
     );
   }
-  imapConnectionDuration.record((performance.now() - connectStart) / 1000, {
+  telemetry.imapConnectionDuration.record((performance.now() - connectStart) / 1000, {
     'account.id': account.id,
     outcome: 'ok'
   });
@@ -245,74 +242,6 @@ const findAccount = (
     throw new Error(`Unknown account id: "${accountId}"`);
   }
   return account;
-};
-
-type OperationOutcome = 'success' | 'not_found' | 'read_only' | 'imap_connection_error' | 'error';
-
-/** Mirrors api/routes/shared.ts's isResourceNotFoundError message
- * vocabulary, kept as an independent copy here (not an import) so this
- * service layer doesn't take a dependency on the api/ layer. */
-const isNotFoundMessage = (message: string): boolean =>
-  /unknown account id|unknown mailbox|mailbox.*not found|no such mailbox/i.test(message);
-
-const classifyOutcome = (error: unknown): OperationOutcome => {
-  if (error instanceof ReadOnlyAccountError) {
-    return 'read_only';
-  }
-  if (error instanceof ImapConnectionError) {
-    return 'imap_connection_error';
-  }
-  if (error instanceof Error && isNotFoundMessage(error.message)) {
-    return 'not_found';
-  }
-  return 'error';
-};
-
-/**
- * Wraps a mailboxService operation to record
- * mailtool.mailbox.operation.duration. Resolves the account up front so the
- * metric's account.id attribute is always a bounded, config-defined value —
- * an unknown accountId is tagged "unknown" rather than echoing arbitrary
- * caller input, which could otherwise blow up attribute cardinality (see
- * docs/otel-metrics-proposal.md).
- */
-const recordOperation = async <T>(
-  accounts: AccountConfig[],
-  operation: string,
-  accountId: string,
-  fn: (account: AccountConfig) => Promise<T>
-): Promise<T> => {
-  const start = performance.now();
-  const durationSeconds = (): number => (performance.now() - start) / 1000;
-
-  let account: AccountConfig;
-  try {
-    account = findAccount(accounts, accountId);
-  } catch (error) {
-    mailboxOperationDuration.record(durationSeconds(), {
-      'account.id': 'unknown',
-      operation,
-      outcome: 'not_found'
-    });
-    throw error;
-  }
-
-  try {
-    const result = await fn(account);
-    mailboxOperationDuration.record(durationSeconds(), {
-      'account.id': account.id,
-      operation,
-      outcome: result === false ? 'not_found' : 'success'
-    });
-    return result;
-  } catch (error) {
-    mailboxOperationDuration.record(durationSeconds(), {
-      'account.id': account.id,
-      operation,
-      outcome: classifyOutcome(error)
-    });
-    throw error;
-  }
 };
 
 const isTextType = (type: string): boolean => type.toLowerCase().startsWith('text/');
@@ -404,8 +333,10 @@ export const createMailboxService = (
   const ctor =
     options.MailboxClientCtor ?? (ImapFlow as unknown as MailboxClientConstructor);
 
+  const resolveAccount = (accountId: string): AccountConfig => findAccount(accounts, accountId);
+
   const listMailboxes = (accountId: string): Promise<ListResponse[]> =>
-    recordOperation(accounts, 'list_mailboxes', accountId, (account) =>
+    recordMailboxOperation('list_mailboxes', accountId, resolveAccount, (account) =>
       withClient(account, ctor, (client) => client.list())
     );
 
@@ -414,7 +345,7 @@ export const createMailboxService = (
     mailbox: string,
     opts: ListMessagesOptions = {}
   ): Promise<FetchMessageObject[]> =>
-    recordOperation(accounts, 'list_messages', accountId, (account) =>
+    recordMailboxOperation('list_messages', accountId, resolveAccount, (account) =>
       withClient(account, ctor, async (client) => {
         await client.mailboxOpen(mailbox);
         const range = opts.sinceUid != null ? `${opts.sinceUid}:*` : '1:*';
@@ -431,7 +362,7 @@ export const createMailboxService = (
     mailbox: string,
     uid: number
   ): Promise<MessageDetail | false> =>
-    recordOperation(accounts, 'get_message', accountId, (account) =>
+    recordMailboxOperation('get_message', accountId, resolveAccount, (account) =>
       withClient(account, ctor, async (client) => {
         await client.mailboxOpen(mailbox);
         const message = await client.fetchOne(String(uid), DETAIL_FETCH_QUERY, {
@@ -465,7 +396,7 @@ export const createMailboxService = (
     uid: number,
     partId: string
   ): Promise<AttachmentContent | false> =>
-    recordOperation(accounts, 'get_attachment', accountId, (account) =>
+    recordMailboxOperation('get_attachment', accountId, resolveAccount, (account) =>
       withClient(account, ctor, async (client) => {
         await client.mailboxOpen(mailbox);
         const message = await client.fetchOne(
@@ -504,7 +435,7 @@ export const createMailboxService = (
     mailbox: string,
     uid: number
   ): Promise<Buffer | false> =>
-    recordOperation(accounts, 'get_raw_source', accountId, (account) =>
+    recordMailboxOperation('get_raw_source', accountId, resolveAccount, (account) =>
       withClient(account, ctor, async (client) => {
         await client.mailboxOpen(mailbox);
 
@@ -530,7 +461,7 @@ export const createMailboxService = (
     uid: number,
     destination: string
   ): Promise<CopyResponseObject | false> =>
-    recordOperation(accounts, 'move_message', accountId, (account) => {
+    recordMailboxOperation('move_message', accountId, resolveAccount, (account) => {
       if (account.readOnly) {
         throw new ReadOnlyAccountError(accountId, 'move_message');
       }
@@ -547,7 +478,7 @@ export const createMailboxService = (
     add: string[],
     remove: string[]
   ): Promise<void> =>
-    recordOperation(accounts, 'set_flags', accountId, (account) => {
+    recordMailboxOperation('set_flags', accountId, resolveAccount, (account) => {
       if (account.readOnly) {
         throw new ReadOnlyAccountError(accountId, 'set_flags');
       }

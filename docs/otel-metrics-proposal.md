@@ -88,7 +88,25 @@ inside it.
   strings are easy to get inconsistent when declared inline at every call
   site, and this repo already has a precedent for "one factory, many
   callers." Adding a new metric means adding one entry here and importing it
-  where needed.
+  where needed. Call sites import it as a namespace —
+  `import * as telemetry from '.../telemetry/instruments.js'` — so a
+  recording reads as `telemetry.mailboxOperationDuration.record(...)` at a
+  glance, rather than an unqualified `mailboxOperationDuration.record(...)`
+  that looks like it could be local business-logic state (raised in review
+  on Task 2's PR).
+
+- **Instrumentation logic that's more than a one-line call at the recording
+  site lives in its own module under `telemetry/`, not inline in the
+  business-logic file it instruments.** Task 2's outcome-classification +
+  wrapper logic (`recordMailboxOperation`) was initially written directly in
+  `mailboxService.ts`; review feedback moved it to
+  `telemetry/mailboxOperationMetrics.ts` since it was adding a lot of
+  utility boilerplate to an already-long file. Where this creates a
+  potential circular import (e.g. the extracted module needing to recognize
+  error types defined in the file it instruments), prefer matching on
+  `error.name` over `instanceof` rather than importing the error class back
+  in — both `ReadOnlyAccountError` and `ImapConnectionError` already set
+  `this.name` in their constructors for exactly this kind of use.
 
 - **No generic HTTP request-rate/latency/error metrics for the plain HTTP
   API in this pass.** No `api/metricsPlugin.ts`, no `http.server.*`
