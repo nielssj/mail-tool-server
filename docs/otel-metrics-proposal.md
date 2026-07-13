@@ -15,12 +15,8 @@ intentionally excluded — see below.
 - Traces and logs-as-signals. The instrumentation seams introduced here would
   make adding OTel tracing straightforward later (same call sites), but this
   pass is metrics-only.
-- **Generic HTTP request-rate/latency/error-rate (RED) metrics for the plain
-  HTTP API.** The cluster's Traefik ingress already emits OTel-semantic-
-  convention-aligned HTTP metrics at the edge (entrypoint/router/service
-  level) for every request it proxies, so instrumenting the same signal again
-  in-process would be redundant. See "Generic HTTP metrics are delegated to
-  the Traefik ingress" below for exactly what this does and doesn't cover.
+- Generic HTTP request-rate/latency/error-rate metrics for the plain HTTP
+  API. Out of scope for this pass.
 
 ### Stack additions
 
@@ -94,38 +90,17 @@ inside it.
   callers." Adding a new metric means adding one entry here and importing it
   where needed.
 
-- **Generic HTTP metrics are delegated to the Traefik ingress, not
-  instrumented in-app.** Traefik v3 natively emits OTel-semantic-convention-
-  aligned HTTP metrics (`entrypoint.request.duration`, `router.request.duration`,
-  `service.request.duration`, carrying `code`/`method` and, with
-  `addRoutersLabels` enabled, per-router labels) for every request it
-  proxies. Duplicating that in-process via Fastify `onRequest`/`onResponse`
-  hooks would be redundant edge-and-app double bookkeeping for a signal
-  that's already available for free at the edge — so this plan carries no
-  `api/metricsPlugin.ts` and no `http.server.*` instruments. Two things this
-  deliberately does *not* cover, both still handled elsewhere in this plan:
-  1. **MCP tool calls.** Traefik sees `POST /mcp` as one flat route and
-     can't see inside the JSON-RPC body — it can't distinguish
-     `list_messages` from `move_message`, or a tool-level `isError: true`
-     result (still an HTTP 200) from a genuine success. `mailtool.mcp.tool.duration`
-     (still instrumented in-app, see catalog below) is the only place that
-     breakdown can come from.
-  2. **Traffic that bypasses the ingress.** If anything ever calls the
-     Service directly inside the cluster (skipping Traefik), that traffic is
-     invisible to edge metrics. This plan assumes all HTTP API traffic flows
-     through Traefik; worth confirming that holds for this deployment.
-
-  `mailtool.mailbox.operation.duration` (below) remains the app-side
-  complement either way — it's scoped to logical operation and tagged by
-  `outcome` (not just HTTP status), giving a clean split: Traefik owns
-  edge/transport health, this app owns logical-operation health.
+- **No generic HTTP request-rate/latency/error metrics for the plain HTTP
+  API in this pass.** No `api/metricsPlugin.ts`, no `http.server.*`
+  instruments. `mailtool.mailbox.operation.duration` (below) is the
+  app-level signal for HTTP-triggered activity — scoped to logical
+  operation and tagged by `outcome`, not raw HTTP framing.
 
 - **Domain metrics use a project-specific `mailtool.*` namespace.** This
-  keeps them clearly distinct from anything an infrastructure-level
-  instrumentation source (Traefik, a future Node runtime
-  auto-instrumentation package, etc.) might emit, and avoids any naming
-  collision if generic OTel semantic-convention metrics are ever added
-  in-app later.
+  keeps them clearly distinct from anything another instrumentation source
+  (e.g. a future Node runtime auto-instrumentation package) might emit, and
+  avoids any naming collision if generic OTel semantic-convention metrics
+  are ever added in-app later.
 
 - **Bounded-cardinality attributes only — no message UIDs, filenames,
   webhook URLs, or arbitrary caller-supplied mailbox paths as metric
@@ -149,17 +124,19 @@ inside it.
   duration histogram can't (event counts, reconnects, byte sizes, live
   connection state).
 
-- **Instrument once at shared seams, not once per surface.** `mailboxService`
-  is the single core both the HTTP routes and the MCP tools call through (per
-  the existing "thin adapter, reuse don't reimplement" principle from the MCP
-  proposal) — instrumenting `mailboxService` itself, tagged with a `surface`
-  attribute (`http` | `mcp`) passed down from each caller, means operation
-  metrics are correct and consistent for both without duplicating
-  instrumentation in eight route files and eight tool files. MCP tool-call
-  metrics are additionally recorded at the `withToolErrors` seam (one
-  wrapper, every tool) since that layer also carries MCP-specific concerns
-  (tool name, `isError`/error code shape) that don't exist at the
-  `mailboxService` level.
+- **Instrument once at a shared seam, no `surface` attribute.**
+  `mailboxService` is the single core both the HTTP routes and the MCP tools
+  call through (per the existing "thin adapter, reuse don't reimplement"
+  principle from the MCP proposal) — instrumenting `mailboxService` itself
+  means operation metrics are correct and consistent for both without
+  duplicating instrumentation in eight route files and eight tool files.
+  `mailtool.mailbox.operation.duration` does **not** carry a `surface`
+  (`http`/`mcp`) attribute: adding one would mean threading a new parameter
+  through every HTTP route and MCP tool call site into `mailboxService`'s
+  signature, which isn't worth the churn — this metric intentionally can't
+  tell whether a given operation was HTTP- or MCP-triggered.
+  `mailtool.mcp.tool.duration` (recorded separately, at the `withToolErrors`
+  seam) still gives full per-tool granularity for the MCP side specifically.
 
 - **Observable (callback) gauges for "current state," synchronous
   counters/histograms for "things that happened."** Watcher connection state
@@ -168,6 +145,13 @@ inside it.
   `ObservableGauge` callback avoids the awkwardness of trying to keep a
   push-based gauge in sync on every state transition, reconnect, and
   shutdown. New-mail/flags-changed/removed events are naturally *counters*.
+
+- **Histogram bucket boundaries left at OTel SDK defaults for v1.** No
+  explicit boundaries are set for any histogram (including the byte-size
+  ones — `mailtool.blobstore.stage.bytes` — where mail attachment sizes are
+  unlikely to match generic defaults well). `telemetry/instruments.ts`
+  carries a comment flagging this for recalibration once real traffic data
+  exists, rather than guessing bucket boundaries now.
 
 ### Metrics catalog
 
@@ -180,15 +164,11 @@ inside it.
 | `mailtool.imap.connection.duration` | Histogram | s | `account.id`, `outcome` (`ok`\|`error`) | `mailboxService`'s `withClient` |
 | `mailtool.imap.connection.errors` | Counter | {error} | `account.id` | `mailboxService`'s `withClient` |
 
-Generic HTTP request-rate/latency/error metrics for the plain HTTP API are
-intentionally *not* duplicated here — see "Generic HTTP metrics are
-delegated to the Traefik ingress" above.
-
 **Domain-specific**
 
 | Name | Type | Unit | Attributes | Source |
 | --- | --- | --- | --- | --- |
-| `mailtool.mailbox.operation.duration` | Histogram | s | `account.id`, `operation` (`list_mailboxes`\|`list_messages`\|`get_message`\|`get_attachment`\|`get_raw_source`\|`move_message`\|`set_flags`), `surface` (`http`\|`mcp`), `outcome` | `mailboxService` wrapper |
+| `mailtool.mailbox.operation.duration` | Histogram | s | `account.id`, `operation` (`list_mailboxes`\|`list_messages`\|`get_message`\|`get_attachment`\|`get_raw_source`\|`move_message`\|`set_flags`), `outcome` | `mailboxService` wrapper |
 | `mailtool.watcher.events` | Counter | {event} | `account.id`, `mailbox`, `event` (`newMail`\|`flagsChanged`\|`mailRemoved`) | `imap/watcher.ts` handlers |
 | `mailtool.watcher.new_mail.messages` | Counter | {message} | `account.id`, `mailbox` | `imap/watcher.ts` `handleExists` (incremented by `count - previousCount`, not just 1 per event) |
 | `mailtool.watcher.reconnects` | Counter | {reconnect} | `account.id` | `imap/watcher.ts` `handleConnectionDrop`/`reconnect` |
@@ -214,7 +194,10 @@ await approval).
 (dev-only, for tests) dependencies. Add `src/telemetry/metrics.ts`
 (`getMeter(name: string): Meter`, thin wrapper over the global API) and
 `src/telemetry/instruments.ts` (every instrument from the catalog above,
-created once and exported by name — no call sites wired yet). Add a small
+created once and exported by name — no call sites wired yet). No explicit
+histogram bucket boundaries are set (OTel SDK defaults for v1); each
+histogram instrument carries a short comment noting boundaries should be
+recalibrated once real traffic/attachment-size data exists. Add a small
 test-only helper (e.g. `src/telemetry/testing.ts`, only imported from
 `test/`) that registers an in-memory `MeterProvider` + reader for assertions.
 **Acceptance criteria:** Instruments can be created and recorded against with
@@ -228,15 +211,13 @@ call sites changed yet).
 `mailtool.imap.connection.duration`/`mailtool.imap.connection.errors`, and
 wrap each of the seven service methods to record
 `mailtool.mailbox.operation.duration` with `operation`/`outcome` attributes.
-Add a `surface: 'http' | 'mcp'` parameter threaded from each HTTP route and
-MCP tool call site into the service call (smallest possible signature change
-— an options object, not a new parameter per call, to avoid an eight-file
-signature churn becoming a merge hazard).
+No signature changes to `mailboxService`'s public methods — instrumentation
+wraps the existing implementations internally.
 **Acceptance criteria:** Unit tests (mocked `ImapFlow`, existing pattern)
 assert each of the 7 operations records the duration histogram with the
-correct `operation`/`surface`/`outcome` for a success case, a not-found case,
-and a thrown-error case; connection metrics recorded on both connect success
-and `ImapConnectionError`.
+correct `operation`/`outcome` for a success case, a not-found case, and a
+thrown-error case; connection metrics recorded on both connect success and
+`ImapConnectionError`.
 
 #### Task 3 — Watcher domain metrics
 **Description:** In `imap/watcher.ts`, record `mailtool.watcher.events` and
@@ -285,50 +266,30 @@ for a real `POST /mcp` call.
 **Description:** New `docs/metrics.md`: the full metrics catalog (name,
 type, unit, attributes, description, source) as the authoritative reference
 for whoever configures collection — effectively the "what you can scrape"
-contract. Explicitly notes that generic HTTP RED metrics are sourced from
-the Traefik ingress, not this service, and points at Traefik's own metrics
-docs for that half of the picture. README gets a short "Metrics" section:
-what's emitted, the no-op-by-default behavior, and a pointer to
-`docs/metrics.md` plus a one-line example of registering a `MeterProvider`
-(e.g. via an OTLP exporter) to actually collect them, explicitly marked as
+contract. README gets a short "Metrics" section: what's emitted, the
+no-op-by-default behavior, and a pointer to `docs/metrics.md` plus a
+one-line example of registering a `MeterProvider` (e.g. via an OTLP
+exporter) to actually collect them, explicitly marked as
 illustrative/deploy-time, not part of the running server.
 **Acceptance criteria:** `docs/metrics.md` lists every instrument from Tasks
 1–5 with correct final attribute names (kept in sync with what actually
 shipped, not just this proposal's draft names); a developer can read it and
-know exactly what to expect from a scrape without reading source, and knows
-where to look (Traefik) for what's deliberately absent.
+know exactly what to expect from a scrape without reading source.
 
 ---
 
-### Open questions for review
+### Resolved decisions
 
-1. **Namespace prefix** — `mailtool.` proposed for domain metrics. Any
-   preference for a different prefix (e.g. matching an org-wide convention
-   you already use elsewhere)?
-2. **`surface` attribute threading (Task 2)** — adding an options-object
-   parameter to `mailboxService` methods is the smallest change I could find,
-   but it does touch every HTTP route and MCP tool call site to pass
-   `surface`. Acceptable, or would you rather infer/omit it (e.g. drop the
-   `surface` attribute entirely and rely on `mailtool.mcp.tool.duration`
-   existing as a proxy for "this went through MCP")?
-3. **Local dev convenience** — do you want a minimal local exporter setup
-   (e.g. a `docs/`-documented snippet or an optional dev script wiring
-   `@opentelemetry/sdk-metrics` + console/Prometheus exporter behind an env
-   flag) so metrics are visibly checkable in `npm run dev` before a real
-   collection platform exists? Proposed default: no, keep this repo's scope
-   to instrumentation only and leave that to the separate collection-platform
-   work — but easy to add as an extra task if useful.
-4. **Histogram bucket boundaries** — not specified above; OTel SDK defaults
-   are reasonable for request/operation durations (sub-second to low seconds)
-   but attachment/message byte-size histograms may want explicit boundaries
-   tuned to typical mail sizes (KB–tens of MB). Fine to leave as SDK defaults
-   for v1 and tune later once real data exists, or would you rather set
-   explicit boundaries now?
-5. **Scope confirmation** — metrics only, no tracing, in this pass (tracing
-   would reuse the same seams later). Confirm that's the intent before I
-   scope Task 1 around metrics-only dependencies.
-6. **Traefik metrics enablement** — outside this repo, but worth confirming
-   before relying on it: that Traefik's metrics (OTel or Prometheus export)
-   are actually enabled and scraped for this service's route(s), and whether
-   `addRoutersLabels` / per-path IngressRoutes are worth configuring for
-   route-level granularity, or a single flat per-service view is acceptable.
+1. **Namespace prefix** — `mailtool.` for domain metrics.
+2. **No `surface` attribute** — `mailtool.mailbox.operation.duration` isn't
+   tagged with `http`/`mcp`; not worth threading a new parameter through
+   `mailboxService`'s signature and every call site for it. MCP-specific
+   granularity still comes from `mailtool.mcp.tool.duration`.
+3. **No bundled exporter** — this repo stays instrumentation-only against
+   `@opentelemetry/api`; no dev-mode console/Prometheus exporter is added.
+   Collection setup (including for local dev, if ever wanted) is entirely a
+   separate, later concern.
+4. **Histogram bucket boundaries** — left at OTel SDK defaults for v1;
+   `instruments.ts` carries a comment flagging recalibration once real
+   traffic/attachment-size data exists.
+5. **Scope** — metrics only, no tracing, in this pass.
