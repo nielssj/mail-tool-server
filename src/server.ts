@@ -17,6 +17,7 @@ import { withMailboxOperationMetrics } from './telemetry/mailboxOperationMetrics
 import { observeWatcherMetrics, unobserveWatcherMetrics } from './telemetry/watcherMetrics.js';
 import { withDispatcherMetrics } from './telemetry/dispatcherMetrics.js';
 import { withBlobStoreMetrics } from './telemetry/blobStoreMetrics.js';
+import { observeMcpTransportMetrics } from './telemetry/mcpTransportMetrics.js';
 import type { AccountConfig } from './utils/config/schema.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
@@ -52,6 +53,7 @@ const startMcpServer = async (
   }
 
   const server = createMcpHttpServer({ mailboxService, accounts, blobStore });
+  observeMcpTransportMetrics(server);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(mcpPort, host, () => {
