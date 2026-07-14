@@ -33,7 +33,12 @@ describe('createBlobStore', () => {
     const store = createBlobStore(CONFIG);
     const body = Buffer.from('hello world', 'utf8');
 
-    const result = await store.stage({ body, contentType: 'text/plain', filename: 'note.txt' });
+    const result = await store.stage({
+      body,
+      contentType: 'text/plain',
+      filename: 'note.txt',
+      kind: 'attachment'
+    });
 
     expect(result.url).toBe('https://mail-tool-blobs.s3.amazonaws.com/staged-key?signature=abc');
 
@@ -50,8 +55,8 @@ describe('createBlobStore', () => {
 
   it('stages a fresh random key on each call (no reuse/caching)', async () => {
     const store = createBlobStore(CONFIG);
-    await store.stage({ body: Buffer.from('a'), filename: 'a.txt' });
-    await store.stage({ body: Buffer.from('b'), filename: 'b.txt' });
+    await store.stage({ body: Buffer.from('a'), filename: 'a.txt', kind: 'attachment' });
+    await store.stage({ body: Buffer.from('b'), filename: 'b.txt', kind: 'attachment' });
 
     const [first, second] = s3Mock.commandCalls(PutObjectCommand);
     expect(first!.args[0].input.Key).not.toBe(second!.args[0].input.Key);
@@ -59,7 +64,7 @@ describe('createBlobStore', () => {
 
   it('mints the pre-signed URL with the configured TTL', async () => {
     const store = createBlobStore(CONFIG);
-    await store.stage({ body: Buffer.from('x'), filename: 'x.bin' });
+    await store.stage({ body: Buffer.from('x'), filename: 'x.bin', kind: 'attachment' });
 
     expect(getSignedUrlMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -71,7 +76,7 @@ describe('createBlobStore', () => {
   it('returns an expiresAt consistent with the configured TTL', async () => {
     const store = createBlobStore(CONFIG);
     const before = Date.now();
-    const result = await store.stage({ body: Buffer.from('x'), filename: 'x.bin' });
+    const result = await store.stage({ body: Buffer.from('x'), filename: 'x.bin', kind: 'attachment' });
     const after = Date.now();
 
     const expiresAtMs = new Date(result.expiresAt).getTime();

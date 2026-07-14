@@ -67,7 +67,8 @@ describe('delivery tools', () => {
       expect(stage).toHaveBeenCalledWith({
         body: content,
         contentType: 'application/pdf',
-        filename: 'invoice.pdf'
+        filename: 'invoice.pdf',
+        kind: 'attachment'
       });
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({
@@ -161,7 +162,8 @@ describe('delivery tools', () => {
       expect(stage).toHaveBeenCalledWith({
         body: source,
         contentType: 'message/rfc822',
-        filename: 'message-7.eml'
+        filename: 'message-7.eml',
+        kind: 'message'
       });
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({

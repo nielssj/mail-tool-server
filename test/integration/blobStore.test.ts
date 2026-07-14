@@ -61,7 +61,8 @@ describe('integration: blobStore against a real S3-compatible server', () => {
     const { url, expiresAt } = await store.stage({
       body,
       contentType: 'text/plain',
-      filename: 'fox.txt'
+      filename: 'fox.txt',
+      kind: 'attachment'
     });
 
     const response = await fetch(url);
