@@ -181,4 +181,57 @@ describe('AccountWatcher', () => {
 
     await watcher.stop();
   });
+
+  it('emits "reconnecting" once per reconnect attempt', async () => {
+    vi.useFakeTimers();
+
+    const { ctor, instances } = buildWatcherCtor();
+    const watcher = new AccountWatcher(ACCOUNT, {
+      WatcherClientCtor: ctor,
+      reconnectDelayMs: 25
+    });
+    const reconnecting = vi.fn();
+    watcher.on('reconnecting', reconnecting);
+
+    await watcher.start();
+    instances[0]?.emit('close');
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(reconnecting).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+  });
+
+  describe('isConnected', () => {
+    it('is false before start() and true once connected', async () => {
+      const { ctor } = buildWatcherCtor();
+      const watcher = new AccountWatcher(ACCOUNT, { WatcherClientCtor: ctor });
+
+      expect(watcher.isConnected()).toBe(false);
+      await watcher.start();
+      expect(watcher.isConnected()).toBe(true);
+
+      await watcher.stop();
+      expect(watcher.isConnected()).toBe(false);
+    });
+  });
+
+  describe('getMailboxMessageCount', () => {
+    it('returns undefined before start(), then the last-known count', async () => {
+      const { ctor, instances } = buildWatcherCtor({
+        mailboxOpen: () => Promise.resolve({ exists: 2 })
+      });
+      const watcher = new AccountWatcher(ACCOUNT, { WatcherClientCtor: ctor });
+
+      expect(watcher.getMailboxMessageCount('INBOX')).toBeUndefined();
+      await watcher.start();
+      expect(watcher.getMailboxMessageCount('INBOX')).toBe(2);
+
+      instances[0]?.emit('exists', 5);
+      expect(watcher.getMailboxMessageCount('INBOX')).toBe(5);
+
+      await watcher.stop();
+      expect(watcher.getMailboxMessageCount('INBOX')).toBeUndefined();
+    });
+  });
 });

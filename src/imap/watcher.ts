@@ -82,6 +82,8 @@ type AccountWatcherEvents = {
   newMail: (event: NewMailEvent) => void;
   flagsChanged: (event: FlagsChangedEvent) => void;
   mailRemoved: (event: MailRemovedEvent) => void;
+  /** Emitted once per reconnect attempt, right before it's made. */
+  reconnecting: () => void;
 };
 
 const DEFAULT_RECONNECT_DELAY_MS = 1_000;
@@ -189,6 +191,18 @@ export class AccountWatcher extends EventEmitter {
     } catch {
       // Best-effort shutdown.
     }
+  }
+
+  /** Whether this watcher currently holds a live IMAP connection. */
+  isConnected(): boolean {
+    return this.client != null;
+  }
+
+  /** Last-known message count for a watched mailbox, or undefined if the
+   * watcher hasn't opened it yet (e.g. before start() completes, or after
+   * stop()). */
+  getMailboxMessageCount(mailbox: string): number | undefined {
+    return this.mailboxCounts.get(mailbox);
   }
 
   private async connectAndWatch(): Promise<void> {
@@ -398,6 +412,7 @@ export class AccountWatcher extends EventEmitter {
   }
 
   private async reconnect(): Promise<void> {
+    this.emit('reconnecting');
     try {
       await this.connectAndWatch();
     } catch (error) {
