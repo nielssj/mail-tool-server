@@ -14,6 +14,7 @@ import { createBlobStore, type BlobStore } from './storage/blobStore.js';
 import { createMcpHttpServer } from './mcp/httpServer.js';
 import { withConnectionMetrics } from './telemetry/imapConnectionMetrics.js';
 import { withMailboxOperationMetrics } from './telemetry/mailboxOperationMetrics.js';
+import { observeWatcherMetrics, unobserveWatcherMetrics } from './telemetry/watcherMetrics.js';
 import type { AccountConfig } from './utils/config/schema.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
@@ -82,6 +83,7 @@ const start = async (): Promise<void> => {
     const watcher = watchers[i]!;
     const dispatchers = account.dispatchers.map((d) => createDispatcher(d));
     subscribeWatcher(watcher, dispatchers);
+    observeWatcherMetrics(watcher, account);
   }
 
   let app: HttpApp | undefined;
@@ -89,6 +91,9 @@ const start = async (): Promise<void> => {
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal}, shutting down...`);
+    for (const account of accounts) {
+      unobserveWatcherMetrics(account);
+    }
     await Promise.all([
       app?.close(),
       mcpServer ? closeMcpServer(mcpServer) : undefined,

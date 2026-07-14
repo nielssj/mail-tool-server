@@ -59,14 +59,26 @@ src/
                       mailtool.imap.connection.duration/.errors around
                       connect(); every other MailboxClient method is
                       delegated through unchanged.
+    watcherMetrics.ts   observeWatcherMetrics(watcher, account) — subscribes
+                      to an AccountWatcher's existing public events
+                      (newMail/flagsChanged/mailRemoved/reconnecting) to
+                      record counters, and registers the watcher in a
+                      module-level registry that backs two ObservableGauge
+                      callbacks (connection state, per-mailbox message
+                      count), registered once at module load.
   server.ts   the composition root: wraps ImapFlow with
               withConnectionMetrics before handing it to
               createMailboxService, then wraps the resulting service with
-              withMailboxOperationMetrics — mailboxService.ts and the real
-              IMAP client stay fully telemetry-free.
-  imap/watcher.ts               records domain event counters + registers
-                                 observable gauges for connection state and
-                                 per-mailbox message counts.
+              withMailboxOperationMetrics; calls observeWatcherMetrics for
+              each watcher alongside the existing subscribeWatcher wiring.
+              mailboxService.ts and the real IMAP client stay fully
+              telemetry-free.
+  imap/watcher.ts   carries three small, non-telemetry additions so
+                     watcherMetrics.ts can observe it from the outside: a
+                     `reconnecting` event (emitted once per reconnect
+                     attempt), and two read-only methods, `isConnected()`
+                     and `getMailboxMessageCount(mailbox)`. No existing
+                     behavior changes.
   events/dispatchers/webhookDispatcher.ts   records dispatch outcome/timing.
   storage/blobStore.ts                      records staging outcome/timing/size.
   mcp/errors.ts        withToolErrors gains a sibling (or is extended) to
@@ -134,6 +146,23 @@ inside it.
   the connection decorator can label its measurements — not telemetry logic
   itself, just exposing account identity to whatever client gets
   constructed.
+
+- **Same pattern for the watcher: prefer an existing public event over
+  adding new surface, and add the smallest possible surface when there
+  isn't one.** `AccountWatcher` already emits `newMail`/`flagsChanged`/
+  `mailRemoved` publicly (the same events `events/dispatcher.ts`'s
+  `subscribeWatcher` already consumes), so `watcherMetrics.ts` subscribes to
+  those directly — zero changes to `watcher.ts` for those three counters.
+  Two things genuinely had no public signal to observe: reconnect attempts
+  (purely internal to `handleConnectionDrop`/`reconnect()`) and current
+  state for the two `ObservableGauge`s (connection status, per-mailbox
+  count — both need to be *read* at collection time, not just reacted to).
+  For those, `watcher.ts` gained the smallest surface that makes them
+  observable: a `reconnecting` event (emitted once per attempt, no
+  payload — the caller already has the account) and two read-only methods,
+  `isConnected()` and `getMailboxMessageCount(mailbox)`. All three are
+  generically useful introspection, not telemetry-shaped — the same
+  category of change as Task 2's `id` field.
 
 - **No generic HTTP request-rate/latency/error metrics for the plain HTTP
   API in this pass.** No `api/metricsPlugin.ts`, no `http.server.*`
@@ -215,11 +244,11 @@ inside it.
 | Name | Type | Unit | Attributes | Source |
 | --- | --- | --- | --- | --- |
 | `mailtool.mailbox.operation.duration` | Histogram | s | `account.id`, `operation` (`list_mailboxes`\|`list_messages`\|`get_message`\|`get_attachment`\|`get_raw_source`\|`move_message`\|`set_flags`), `outcome` | `telemetry/mailboxOperationMetrics.ts`'s `withMailboxOperationMetrics` |
-| `mailtool.watcher.events` | Counter | {event} | `account.id`, `mailbox`, `event` (`newMail`\|`flagsChanged`\|`mailRemoved`) | `imap/watcher.ts` handlers |
-| `mailtool.watcher.new_mail.messages` | Counter | {message} | `account.id`, `mailbox` | `imap/watcher.ts` `handleExists` (incremented by `count - previousCount`, not just 1 per event) |
-| `mailtool.watcher.reconnects` | Counter | {reconnect} | `account.id` | `imap/watcher.ts` `handleConnectionDrop`/`reconnect` |
-| `mailtool.watcher.connection_state` | ObservableGauge | 1 (bool) | `account.id` | `imap/watcher.ts`, callback reads `this.client != null` |
-| `mailtool.watcher.mailbox.message_count` | ObservableGauge | {message} | `account.id`, `mailbox` | `imap/watcher.ts`, callback reads `mailboxCounts` map |
+| `mailtool.watcher.events` | Counter | {event} | `account.id`, `mailbox`, `event` (`newMail`\|`flagsChanged`\|`mailRemoved`) | `telemetry/watcherMetrics.ts`'s `observeWatcherMetrics`, subscribed to `AccountWatcher`'s existing public events |
+| `mailtool.watcher.new_mail.messages` | Counter | {message} | `account.id`, `mailbox` | `telemetry/watcherMetrics.ts`, from the `newMail` event's `count - previousCount` (not just 1 per event) |
+| `mailtool.watcher.reconnects` | Counter | {reconnect} | `account.id` | `telemetry/watcherMetrics.ts`, subscribed to `AccountWatcher`'s `reconnecting` event |
+| `mailtool.watcher.connection_state` | ObservableGauge | 1 (bool) | `account.id` | `telemetry/watcherMetrics.ts` callback, reads `AccountWatcher.isConnected()` |
+| `mailtool.watcher.mailbox.message_count` | ObservableGauge | {message} | `account.id`, `mailbox` | `telemetry/watcherMetrics.ts` callback, reads `AccountWatcher.getMailboxMessageCount(mailbox)` |
 | `mailtool.dispatcher.webhook.duration` | Histogram | s | `account.id`, `event`, `outcome` (`ok`\|`error`) | `webhookDispatcher.ts` |
 | `mailtool.dispatcher.webhook.attempts` | Counter | {attempt} | `account.id`, `outcome` | `webhookDispatcher.ts` `postWithRetry` |
 | `mailtool.blobstore.stage.duration` | Histogram | s | `kind` (`attachment`\|`message`), `outcome` | `storage/blobStore.ts` `stage()` |
@@ -283,21 +312,34 @@ that every other `MailboxClient` method still delegates through correctly.
 confirming zero behavior change to the service itself.
 
 #### Task 3 — Watcher domain metrics
-**Description:** In `imap/watcher.ts`, record `mailtool.watcher.events` and
-`mailtool.watcher.new_mail.messages` inside `handleExists`/`handleFlags`/
-`handleExpunge`; record `mailtool.watcher.reconnects` in
-`handleConnectionDrop`. Register `mailtool.watcher.connection_state` and
-`mailtool.watcher.mailbox.message_count` as `ObservableGauge` callbacks —
-since gauges are process-global instruments but watchers are per-account
-instances, maintain a small module-level registry of live `AccountWatcher`s
-(populated on `start()`, cleared on `stop()`) that the callback iterates, so
-one gauge covers all accounts rather than one gauge per watcher instance.
-**Acceptance criteria:** Unit tests simulate `exists`/`flags`/`expunge`
-events on a mocked connection (existing test pattern) and assert the correct
-counters increment with correct attributes; a simulated disconnect+reconnect
-increments the reconnect counter; the observable gauges report the expected
-connection state and message count when read via the in-memory test harness,
-for multiple concurrent watcher instances.
+**Status:** DONE
+**Description:** `imap/watcher.ts` gains three small, non-telemetry
+additions: a `reconnecting` event (emitted once per reconnect attempt, at
+the top of `reconnect()`), and two read-only methods, `isConnected()` and
+`getMailboxMessageCount(mailbox)`. No other change to the file — the three
+existing domain events (`newMail`/`flagsChanged`/`mailRemoved`) were already
+public. `telemetry/watcherMetrics.ts` exports `observeWatcherMetrics(watcher,
+account)`, which subscribes to all four events to record
+`mailtool.watcher.events`, `mailtool.watcher.new_mail.messages` (from the
+`newMail` event's `count - previousCount`), and `mailtool.watcher.reconnects`,
+and registers the watcher in a module-level registry backing two
+`ObservableGauge` callbacks (registered once at module load) that read
+`isConnected()`/`getMailboxMessageCount()` across every registered watcher —
+one gauge instrument covers all accounts rather than one per watcher
+instance. A paired `unobserveWatcherMetrics(account)` removes a watcher from
+that registry. `server.ts` calls both alongside the existing watcher
+start/stop and dispatcher-subscription wiring.
+**Acceptance criteria:** Unit tests added directly to `watcher.test.ts` for
+the three new `AccountWatcher` members (`reconnecting` fires once per
+attempt; `isConnected()`/`getMailboxMessageCount()` reflect state correctly
+across start/stop), independent of telemetry. A new `watcherMetrics.test.ts`
+(real `AccountWatcher` + mocked IMAP client, same pattern as
+`watcher.test.ts`) asserts: `exists`/`flags`/`expunge` events on the mocked
+connection produce the correct counters with correct attributes; a simulated
+disconnect+reconnect increments the reconnect counter; the observable gauges
+report the expected connection state and message count while a watcher is
+registered, correctly reflect a disconnect, and report independently for two
+concurrent watchers.
 
 #### Task 4 — Dispatcher + blob store metrics
 **Description:** `webhookDispatcher.ts`'s `postWithRetry` records
