@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { BlobStore, StagedBlob } from '../src/storage/blobStore.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 
@@ -32,7 +33,7 @@ describe('delivery tools', () => {
   ): Promise<Client> => {
     const server = createMcpServer({
       mailboxService: mailboxService as MailboxService,
-      accounts: ACCOUNTS,
+      accountService: createAccountService(ACCOUNTS),
       blobStore
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { ReadOnlyAccountError, type MailboxService } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 
 const ACCOUNTS: AccountConfig[] = [
@@ -23,7 +24,7 @@ describe('mutation tools', () => {
   const connect = async (mailboxService: Partial<MailboxService>): Promise<Client> => {
     const server = createMcpServer({
       mailboxService: mailboxService as MailboxService,
-      accounts: ACCOUNTS
+      accountService: createAccountService(ACCOUNTS)
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test-client', version: '0.0.0' });

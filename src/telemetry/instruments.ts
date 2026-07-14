@@ -37,6 +37,14 @@ export const imapConnectionErrors = meter.createCounter('mailtool.imap.connectio
 
 // ---- Domain-specific ----
 
+export const accountOperationDuration = meter.createHistogram(
+  'mailtool.account.operation.duration',
+  {
+    description: 'Duration of an accountService operation, by operation and outcome.',
+    unit: 's'
+  }
+);
+
 export const mailboxOperationDuration = meter.createHistogram(
   'mailtool.mailbox.operation.duration',
   {

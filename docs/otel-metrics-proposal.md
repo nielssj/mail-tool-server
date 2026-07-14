@@ -54,6 +54,13 @@ src/
                       — decorates a MailboxService object to record
                       mailtool.mailbox.operation.duration around every
                       call. mailboxService.ts itself is untouched.
+    accountOperationMetrics.ts   withAccountOperationMetrics(service) —
+                      decorates an AccountService object (services/accountService.ts,
+                      new: listAccounts() only today) to record
+                      mailtool.account.operation.duration, same pattern as
+                      withMailboxOperationMetrics but simpler — no per-call
+                      accountId to validate, since these operations act on
+                      the whole configured account list, not one account.
     imapConnectionMetrics.ts   withConnectionMetrics(ctor) — decorates a
                       MailboxClientConstructor to record
                       mailtool.imap.connection.duration/.errors around
@@ -69,14 +76,18 @@ src/
   server.ts   the composition root: wraps ImapFlow with
               withConnectionMetrics before handing it to
               createMailboxService, then wraps the resulting service with
-              withMailboxOperationMetrics; calls observeWatcherMetrics for
+              withMailboxOperationMetrics; wraps createAccountService with
+              withAccountOperationMetrics; calls observeWatcherMetrics for
               each watcher alongside the existing subscribeWatcher wiring;
               wraps each configured Dispatcher with withDispatcherMetrics
               and the BlobStore with withBlobStoreMetrics; calls
               observeMcpTransportMetrics on the MCP HTTP server.
-              mailboxService.ts, webhookDispatcher.ts, mcp/errors.ts,
-              mcp/httpServer.ts, mcp/tools/*.ts, and the real IMAP client
-              all stay fully telemetry-free.
+              mailboxService.ts, accountService.ts, webhookDispatcher.ts,
+              mcp/errors.ts, mcp/httpServer.ts, and the real IMAP client
+              all stay fully telemetry-free. mcp/tools/accounts.ts changed
+              only to call accountService.listAccounts() instead of
+              inlining the same mapping — no telemetry awareness there
+              either.
   imap/watcher.ts   carries three small, non-telemetry additions so
                      watcherMetrics.ts can observe it from the outside: a
                      `reconnecting` event (emitted once per reconnect
@@ -110,7 +121,10 @@ Nothing above changes existing return types, error behavior, or public
 interfaces — every instrumentation point is a wrapper or a hook, not a
 rewrite of business logic, consistent with how `withToolErrors` and the
 Fastify error handler already sit alongside the code they observe rather than
-inside it.
+inside it. The one deliberate exception: `CreateMcpServerOptions`/
+`CreateMcpHttpServerOptions` swapped `accounts: AccountConfig[]` for
+`accountService: AccountService` — not instrumentation, but the
+`accountService.ts` extraction described below.
 
 ### Key design decisions
 
@@ -221,10 +235,9 @@ inside it.
   Revisited before merging: three coverage gaps were weighed against the
   cost of 8 call-site wraps and accepted —
   1. `list_accounts` has no underlying `mailboxService` call at all, so it
-     would have zero duration visibility either way. Judged acceptable for
-     now; a future config-reading service shared with a possible HTTP
-     accounts endpoint would give it a natural home without reviving
-     per-tool MCP instrumentation.
+     would have zero duration visibility either way. Judged acceptable at
+     the time; closed immediately after by introducing `accountService`
+     (see below) rather than reviving per-tool MCP instrumentation.
   2. `get_attachment`/`export_message` duration would be split across two
      separate metrics (`mailtool.mailbox.operation.duration` +
      `mailtool.blobstore.stage.duration`) with a small blind gap between
@@ -242,6 +255,31 @@ inside it.
   extra (an external `'request'` listener, zero changes to
   `mcp/httpServer.ts`) and answers a different question (is the MCP
   transport itself healthy) than per-tool duration would have.
+
+- **`accountService.ts` — a new, minimal service, instrumented the same way
+  as `mailboxService.ts` from day one, because it's expected to grow.**
+  `list_accounts`' logic (map configured accounts to `{ id, host,
+  watchMailboxes }`, never `auth`) previously lived inline in
+  `mcp/tools/accounts.ts`. Extracted into `services/accountService.ts`
+  (`AccountService`, `{ listAccounts(): Promise<AccountSummary[]> }`) for
+  two reasons: it closes the `list_accounts` duration gap accepted above,
+  and — more durably — a plain HTTP accounts endpoint is a plausible future
+  addition that would want the same logic `mailboxService` already gives
+  the HTTP routes and MCP tools in common. Building that HTTP surface is
+  explicitly out of scope here; only the service itself and its MCP wiring
+  are in scope. `withAccountOperationMetrics(service)` decorates it exactly
+  like `withMailboxOperationMetrics`, recording
+  `mailtool.account.operation.duration` — deliberately the same shape
+  (`operation`, `outcome` attributes) even though `listAccounts` is the
+  only operation today, so future operations (and a future HTTP surface)
+  slot into the existing pattern rather than needing a new one invented
+  later. Unlike `mailboxService`, there's no per-call `accountId` to
+  validate or bound-label, since every operation here acts on the whole
+  configured account list rather than one account — so the decorator is a
+  strict subset of `withMailboxOperationMetrics`'s logic, not a variant of
+  it. `mcp/tools/accounts.ts`'s `list_accounts` handler now calls
+  `accountService.listAccounts()` instead of inlining the mapping — its
+  only change, and not telemetry-shaped.
 
 - **No generic HTTP request-rate/latency/error metrics for the plain HTTP
   API in this pass.** No `api/metricsPlugin.ts`, no `http.server.*`
@@ -323,6 +361,7 @@ inside it.
 | Name | Type | Unit | Attributes | Source |
 | --- | --- | --- | --- | --- |
 | `mailtool.mailbox.operation.duration` | Histogram | s | `account.id`, `operation` (`list_mailboxes`\|`list_messages`\|`get_message`\|`get_attachment`\|`get_raw_source`\|`move_message`\|`set_flags`), `outcome` | `telemetry/mailboxOperationMetrics.ts`'s `withMailboxOperationMetrics` |
+| `mailtool.account.operation.duration` | Histogram | s | `operation` (`list_accounts`), `outcome` (`success`\|`error`) | `telemetry/accountOperationMetrics.ts`'s `withAccountOperationMetrics` |
 | `mailtool.watcher.events` | Counter | {event} | `account.id`, `mailbox`, `event` (`newMail`\|`flagsChanged`\|`mailRemoved`) | `telemetry/watcherMetrics.ts`'s `observeWatcherMetrics`, subscribed to `AccountWatcher`'s existing public events |
 | `mailtool.watcher.new_mail.messages` | Counter | {message} | `account.id`, `mailbox` | `telemetry/watcherMetrics.ts`, from the `newMail` event's `count - previousCount` (not just 1 per event) |
 | `mailtool.watcher.reconnects` | Counter | {reconnect} | `account.id` | `telemetry/watcherMetrics.ts`, subscribed to `AccountWatcher`'s `reconnecting` event |
@@ -448,7 +487,7 @@ required `kind` field; both pass otherwise unmodified.
 confirmed via `git diff origin/main -- src/events/dispatchers/webhookDispatcher.ts
 src/events/dispatcher.ts` showing no diff.
 
-#### Task 5 — MCP transport metrics
+#### Task 5 — MCP transport metrics + accountService
 **Status:** DONE
 **Description:** `telemetry/mcpTransportMetrics.ts` exports
 `observeMcpTransportMetrics(server)`, attaching an additional `'request'`
@@ -458,15 +497,35 @@ using plain HTTP status semantics — `mcp/httpServer.ts` is untouched.
 alongside its existing startup wiring. Per-tool duration
 (`mailtool.mcp.tool.duration`) was implemented and then dropped before
 merging — see the "Dropped `mailtool.mcp.tool.duration`" design decision
-above. `mcp/tools/*.ts` and `mcp/errors.ts` are consequently untouched by
-this task entirely.
+above. `mcp/errors.ts` stays untouched by this task entirely.
+
+Follow-up, same PR: new `services/accountService.ts` (`AccountService`,
+`listAccounts()` only today) extracted from `list_accounts`' previously
+inline logic, instrumented via new `telemetry/accountOperationMetrics.ts`
+(`withAccountOperationMetrics`) recording
+`mailtool.account.operation.duration` — see the `accountService.ts` design
+decision above for why. This threads `accountService: AccountService`
+through `CreateMcpServerOptions`/`CreateMcpHttpServerOptions` in place of
+the now-unused `accounts: AccountConfig[]` field (nothing else read it),
+which is the one place this task touches beyond a single call site:
+`mcp/tools/accounts.ts`'s `list_accounts` handler, `mcp/server.ts`/
+`mcp/httpServer.ts`'s option types, `scripts/mcpDocs.ts`'s stub, and the
+9 test files constructing those options (mechanical `accounts: ACCOUNTS` →
+`accountService: createAccountService(ACCOUNTS)` swaps).
 **Acceptance criteria:** New `mcpTransportMetrics.test.ts` starts a real
 `createMcpHttpServer` instance and asserts `mailtool.mcp.request.duration`
 is recorded with `outcome: "ok"` for a real `POST /mcp` `initialize` call
 and `outcome: "error"` for a transport-level failure (`GET /mcp` → 405).
-All 8 existing MCP tool test files pass unmodified. `git diff origin/main
--- src/mcp/errors.ts src/mcp/httpServer.ts src/mcp/server.ts src/mcp/tools/`
-is empty.
+New `accountService.test.ts` asserts `listAccounts()` returns `{ id, host,
+watchMailboxes }` for every configured account, never exposes `auth`, and
+handles an empty account list. New `accountOperationMetrics.test.ts`
+asserts the duration histogram records `outcome: "success"`/`"error"`
+correctly against a stub `AccountService`. All existing MCP tool test files
+and `mcpDocs.test.ts` pass with only their options construction updated —
+no behavior assertions changed. `git diff origin/main -- src/mcp/errors.ts`
+is empty; `mcp/httpServer.ts`/`mcp/server.ts` only have their options
+*type* changed (`accounts: AccountConfig[]` → `accountService:
+AccountService`), no logic touched in either file.
 
 #### Task 6 — Docs
 **Description:** New `docs/metrics.md`: the full metrics catalog (name,

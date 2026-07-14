@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../../services/mailboxService.js';
-import type { AccountConfig } from '../../utils/config/schema.js';
+import type { AccountService } from '../../services/accountService.js';
 import { withToolErrors } from '../errors.js';
 
 export type AccountToolsOptions = {
   mailboxService: MailboxService;
-  accounts: AccountConfig[];
+  accountService: AccountService;
 };
 
 const AccountSummarySchema = z.object({
@@ -24,7 +24,7 @@ const MailboxSummarySchema = z.object({
 });
 
 /**
- * Registers the discovery tools: `list_accounts` (config, no service call)
+ * Registers the discovery tools: `list_accounts` (accountService.listAccounts)
  * and `list_mailboxes` (mailboxService.listMailboxes). Both are read-only.
  */
 export const registerAccountTools = (server: McpServer, options: AccountToolsOptions): void => {
@@ -38,11 +38,7 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
       annotations: { readOnlyHint: true }
     },
     withToolErrors(async () => {
-      const accounts = options.accounts.map((account) => ({
-        id: account.id,
-        host: account.host,
-        watchMailboxes: account.watchMailboxes
-      }));
+      const accounts = await options.accountService.listAccounts();
 
       return {
         content: [{ type: 'text' as const, text: `Found ${accounts.length} account(s).` }],

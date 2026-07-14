@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../services/mailboxService.js';
-import type { AccountConfig } from '../utils/config/schema.js';
+import type { AccountService } from '../services/accountService.js';
 import type { BlobStore } from '../storage/blobStore.js';
 import packageJson from '../../package.json' with { type: 'json' };
 import { registerAccountTools } from './tools/accounts.js';
@@ -10,7 +10,7 @@ import { registerMutationTools } from './tools/mutations.js';
 
 export type CreateMcpServerOptions = {
   mailboxService: MailboxService;
-  accounts: AccountConfig[];
+  accountService: AccountService;
   /** Optional — required only for get_attachment/export_message, which
    * throw a clear tool error if called without it configured. */
   blobStore?: BlobStore;

@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createMcpHttpServer } from '../src/mcp/httpServer.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 
 const ACCOUNTS: AccountConfig[] = [
@@ -36,7 +37,7 @@ describe('createMcpHttpServer', () => {
   beforeEach(async () => {
     server = createMcpHttpServer({
       mailboxService: makeMailboxService(),
-      accounts: ACCOUNTS
+      accountService: createAccountService(ACCOUNTS)
     });
 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

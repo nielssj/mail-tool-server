@@ -4,6 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { DEFAULT_BODY_CAP_CHARS } from '../src/mcp/format.js';
 import type { MailboxService, MessageDetail } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 import type { FetchMessageObject } from 'imapflow';
 
@@ -44,7 +45,7 @@ describe('message tools', () => {
   let client: Client | undefined;
 
   const connect = async (mailboxService: MailboxService): Promise<Client> => {
-    const server = createMcpServer({ mailboxService, accounts: ACCOUNTS });
+    const server = createMcpServer({ mailboxService, accountService: createAccountService(ACCOUNTS) });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test-client', version: '0.0.0' });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

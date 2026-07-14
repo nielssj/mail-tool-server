@@ -4,6 +4,7 @@ import type { Histogram } from '@opentelemetry/sdk-metrics';
 import { setupMetricsTestHarness, findMetric } from '../src/telemetry/testing.js';
 import type { MetricsTestHarness } from '../src/telemetry/testing.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 
 const ACCOUNTS: AccountConfig[] = [
@@ -64,7 +65,10 @@ describe('observeMcpTransportMetrics', () => {
 
   it('records outcome "ok" for a successful POST /mcp request', async () => {
     const { createMcpHttpServer, observeMcpTransportMetrics } = await loadModules();
-    const server = createMcpHttpServer({ mailboxService: makeMailboxService(), accounts: ACCOUNTS });
+    const server = createMcpHttpServer({
+      mailboxService: makeMailboxService(),
+      accountService: createAccountService(ACCOUNTS)
+    });
     observeMcpTransportMetrics(server);
 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -98,7 +102,10 @@ describe('observeMcpTransportMetrics', () => {
 
   it('records outcome "error" for a transport-level failure (e.g. wrong method)', async () => {
     const { createMcpHttpServer, observeMcpTransportMetrics } = await loadModules();
-    const server = createMcpHttpServer({ mailboxService: makeMailboxService(), accounts: ACCOUNTS });
+    const server = createMcpHttpServer({
+      mailboxService: makeMailboxService(),
+      accountService: createAccountService(ACCOUNTS)
+    });
     observeMcpTransportMetrics(server);
 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

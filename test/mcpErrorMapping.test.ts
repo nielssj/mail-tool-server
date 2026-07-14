@@ -4,6 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { ImapConnectionError } from '../src/imap/clientFactory.js';
 import { ReadOnlyAccountError, type MailboxService } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 
 const ACCOUNTS: AccountConfig[] = [
@@ -30,7 +31,7 @@ describe('error mapping, driven through real tool calls', () => {
   const connect = async (mailboxService: Partial<MailboxService>): Promise<Client> => {
     const server = createMcpServer({
       mailboxService: mailboxService as MailboxService,
-      accounts: ACCOUNTS
+      accountService: createAccountService(ACCOUNTS)
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test-client', version: '0.0.0' });
@@ -121,7 +122,7 @@ describe('error mapping, driven through real tool calls', () => {
   it('OBJECT_STORAGE_NOT_CONFIGURED: via export_message with no blobStore', async () => {
     const server = createMcpServer({
       mailboxService: { getRawSource: vi.fn() } as unknown as MailboxService,
-      accounts: ACCOUNTS
+      accountService: createAccountService(ACCOUNTS)
       // blobStore intentionally omitted
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

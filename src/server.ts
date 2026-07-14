@@ -10,15 +10,16 @@ import {
   type MailboxClientConstructor,
   type MailboxService
 } from './services/mailboxService.js';
+import { createAccountService, type AccountService } from './services/accountService.js';
 import { createBlobStore, type BlobStore } from './storage/blobStore.js';
 import { createMcpHttpServer } from './mcp/httpServer.js';
 import { withConnectionMetrics } from './telemetry/imapConnectionMetrics.js';
 import { withMailboxOperationMetrics } from './telemetry/mailboxOperationMetrics.js';
+import { withAccountOperationMetrics } from './telemetry/accountOperationMetrics.js';
 import { observeWatcherMetrics, unobserveWatcherMetrics } from './telemetry/watcherMetrics.js';
 import { withDispatcherMetrics } from './telemetry/dispatcherMetrics.js';
 import { withBlobStoreMetrics } from './telemetry/blobStoreMetrics.js';
 import { observeMcpTransportMetrics } from './telemetry/mcpTransportMetrics.js';
-import type { AccountConfig } from './utils/config/schema.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3000);
@@ -44,7 +45,7 @@ const startHttpServer = async (
 };
 
 const startMcpServer = async (
-  accounts: AccountConfig[],
+  accountService: AccountService,
   mailboxService: MailboxService,
   blobStore: BlobStore | undefined
 ): Promise<HttpServer | undefined> => {
@@ -52,7 +53,7 @@ const startMcpServer = async (
     return undefined;
   }
 
-  const server = createMcpHttpServer({ mailboxService, accounts, blobStore });
+  const server = createMcpHttpServer({ mailboxService, accountService, blobStore });
   observeMcpTransportMetrics(server);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -80,6 +81,7 @@ const start = async (): Promise<void> => {
     createMailboxService(accounts, { MailboxClientCtor }),
     accounts
   );
+  const accountService = withAccountOperationMetrics(createAccountService(accounts));
   const blobStore = objectStorage ? withBlobStoreMetrics(createBlobStore(objectStorage)) : undefined;
 
   for (let i = 0; i < accounts.length; i++) {
@@ -113,7 +115,7 @@ const start = async (): Promise<void> => {
     await Promise.all(watchers.map((w) => w.start()));
     [app, mcpServer] = await Promise.all([
       startHttpServer(watchers, mailboxService),
-      startMcpServer(accounts, mailboxService, blobStore)
+      startMcpServer(accountService, mailboxService, blobStore)
     ]);
   } catch (error) {
     logger.error(error, 'Failed to start server');
