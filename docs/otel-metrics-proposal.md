@@ -75,8 +75,8 @@ src/
               and the BlobStore with withBlobStoreMetrics; calls
               observeMcpTransportMetrics on the MCP HTTP server.
               mailboxService.ts, webhookDispatcher.ts, mcp/errors.ts,
-              mcp/httpServer.ts, and the real IMAP client all stay fully
-              telemetry-free.
+              mcp/httpServer.ts, mcp/tools/*.ts, and the real IMAP client
+              all stay fully telemetry-free.
   imap/watcher.ts   carries three small, non-telemetry additions so
                      watcherMetrics.ts can observe it from the outside: a
                      `reconnecting` event (emitted once per reconnect
@@ -97,16 +97,6 @@ src/
                       its two MCP-tool callers — not used by the store
                       itself, exposed purely so a decorator can label its
                       measurements.
-    mcpToolMetrics.ts   withToolMetrics(tool, handler) — decorates an
-                      already-withToolErrors-wrapped tool handler to record
-                      mailtool.mcp.tool.duration, tagged by tool name and
-                      outcome (duck-typed off the resolved result's
-                      isError/structuredContent.error.code — no import
-                      from mcp/errors.ts needed). Composed at each of the
-                      8 registerTool call sites across mcp/tools/*.ts,
-                      since MCP tools are registered individually rather
-                      than through one shared interface object (unlike
-                      MailboxService) — mcp/errors.ts itself is untouched.
     mcpTransportMetrics.ts   observeMcpTransportMetrics(server) — attaches
                       an additional 'request' listener to the MCP HTTP
                       server (Node's http.Server supports multiple
@@ -218,32 +208,40 @@ inside it.
   directly in that same duration histogram. Not worth the extra
   constructor-hook plumbing for a number the histogram already implies.
 
-- **MCP tools are a structural exception to "one decorator wraps everything"
-  — there's no single object to wrap, so the touch point is per
-  registration instead.** Every previous decorator (`withMailboxOperationMetrics`,
-  `withDispatcherMetrics`, `withBlobStoreMetrics`) works by wrapping *one*
-  object that exposes all the operations it covers. MCP tools don't have
-  that: `registerTool` is called 8 separate times across 4 files, each
-  registering one handler directly with the SDK's `McpServer`, so there's
-  no single `MailboxService`-like object to intercept once. The two
-  realistic alternatives were composing `withToolMetrics('tool_name', ...)`
-  at each of the 8 call sites (visible, mechanical, one line each) or
-  monkey-patching `McpServer.registerTool` itself (e.g. via a `Proxy`) to
-  intercept every registration transparently from one place. The latter
-  would touch only `mcp/server.ts`, but at the cost of being much less
-  obvious at each tool's registration site what's happening to it, and of
-  coupling this codebase to the exact shape of a third-party SDK method it
-  doesn't control — a worse trade than 8 mechanical one-line wraps, given
-  how much this proposal has otherwise prioritized readability over
-  minimizing touch points for their own sake. `mcp/errors.ts` and
-  `mcp/httpServer.ts` are still both untouched either way — outcome
-  classification is duck-typed off the resolved result's shape rather than
-  importing `ToolErrorResult`, and the transport-level metric
-  (`mailtool.mcp.request.duration`) is captured by attaching an *additional*
-  `'request'` listener to the MCP HTTP server from `server.ts` — Node's
-  `http.Server` supports multiple independent listeners, so this needed no
-  change to `mcp/httpServer.ts` at all, using plain HTTP status semantics
-  (not MCP/JSON-RPC-aware) to classify outcome at that layer.
+- **Dropped `mailtool.mcp.tool.duration` — accepted that
+  `mailtool.mailbox.operation.duration` is close enough, given the planned
+  usage pattern.** Task 5 initially implemented per-tool duration via
+  `withToolMetrics('tool_name', withToolErrors(handler))`, composed at each
+  of the 8 `registerTool` call sites across `mcp/tools/*.ts` (MCP tools have
+  no single `MailboxService`-like object to wrap once, unlike every other
+  decorator in this proposal — the realistic alternative, monkey-patching
+  `McpServer.registerTool` via a `Proxy` to intercept every registration
+  from one place, was rejected as coupling this codebase to a third-party
+  SDK method's exact shape for a marginal reduction in touch points).
+  Revisited before merging: three coverage gaps were weighed against the
+  cost of 8 call-site wraps and accepted —
+  1. `list_accounts` has no underlying `mailboxService` call at all, so it
+     would have zero duration visibility either way. Judged acceptable for
+     now; a future config-reading service shared with a possible HTTP
+     accounts endpoint would give it a natural home without reviving
+     per-tool MCP instrumentation.
+  2. `get_attachment`/`export_message` duration would be split across two
+     separate metrics (`mailtool.mailbox.operation.duration` +
+     `mailtool.blobstore.stage.duration`) with a small blind gap between
+     them (zod validation, formatting) — judged negligible next to the
+     external I/O (IMAP fetch, S3 upload) those two metrics already cover.
+  3. `mailtool.mailbox.operation.duration` still has no `surface` attribute
+     (see below), so dropping the tool metric means permanently losing the
+     ability to isolate MCP-triggered latency from HTTP-triggered latency
+     in-app. Accepted on the bet that MCP traffic will dwarf HTTP for the
+     planned usage, that a reverse proxy already reports request volume by
+     route/surface, and that `mailtool.mailbox.operation.duration` will in
+     practice mostly *be* the tool-call distribution anyway.
+  `mailtool.mcp.request.duration` (transport-level, all `POST /mcp` calls
+  regardless of JSON-RPC method) is unaffected and stays — it cost nothing
+  extra (an external `'request'` listener, zero changes to
+  `mcp/httpServer.ts`) and answers a different question (is the MCP
+  transport itself healthy) than per-tool duration would have.
 
 - **No generic HTTP request-rate/latency/error metrics for the plain HTTP
   API in this pass.** No `api/metricsPlugin.ts`, no `http.server.*`
@@ -290,10 +288,10 @@ inside it.
   (`http`/`mcp`) attribute: adding one would mean threading a new parameter
   through every HTTP route and MCP tool call site into `mailboxService`'s
   signature, which isn't worth the churn — this metric intentionally can't
-  tell whether a given operation was HTTP- or MCP-triggered.
-  `mailtool.mcp.tool.duration` (recorded separately, via `withToolMetrics` at
-  each tool's registration) still gives full per-tool granularity for the
-  MCP side specifically.
+  tell whether a given operation was HTTP- or MCP-triggered. (A per-tool
+  MCP duration metric would have given that back for the MCP side
+  specifically; dropped for other reasons — see the "Dropped
+  `mailtool.mcp.tool.duration`" decision below.)
 
 - **Observable (callback) gauges for "current state," synchronous
   counters/histograms for "things that happened."** Watcher connection state
@@ -317,7 +315,6 @@ inside it.
 | Name | Type | Unit | Attributes | Source |
 | --- | --- | --- | --- | --- |
 | `mailtool.mcp.request.duration` | Histogram | s | `outcome` (`ok`\|`error`) | `telemetry/mcpTransportMetrics.ts`'s `observeMcpTransportMetrics` (`POST /mcp`, transport-level) |
-| `mailtool.mcp.tool.duration` | Histogram | s | `tool`, `outcome` (`ok`\|error code from `errors.ts`) | `telemetry/mcpToolMetrics.ts`'s `withToolMetrics`, composed at each tool's registration |
 | `mailtool.imap.connection.duration` | Histogram | s | `account.id`, `outcome` (`ok`\|`error`) | `telemetry/imapConnectionMetrics.ts`'s `withConnectionMetrics` |
 | `mailtool.imap.connection.errors` | Counter | {error} | `account.id` | `telemetry/imapConnectionMetrics.ts`'s `withConnectionMetrics` |
 
@@ -451,30 +448,25 @@ required `kind` field; both pass otherwise unmodified.
 confirmed via `git diff origin/main -- src/events/dispatchers/webhookDispatcher.ts
 src/events/dispatcher.ts` showing no diff.
 
-#### Task 5 — MCP tool + transport metrics
+#### Task 5 — MCP transport metrics
 **Status:** DONE
-**Description:** `telemetry/mcpToolMetrics.ts` exports `withToolMetrics(tool,
-handler)`, composed at each of the 8 `registerTool` call sites across
-`mcp/tools/*.ts` — `withToolMetrics('tool_name', withToolErrors(handler))`
-— to record `mailtool.mcp.tool.duration`. Outcome is duck-typed off the
-resolved result's `isError`/`structuredContent.error.code` rather than
-importing `ToolErrorResult` from `mcp/errors.ts`, which is otherwise
-untouched. `telemetry/mcpTransportMetrics.ts` exports
+**Description:** `telemetry/mcpTransportMetrics.ts` exports
 `observeMcpTransportMetrics(server)`, attaching an additional `'request'`
 listener to the MCP HTTP server to record `mailtool.mcp.request.duration`
-using plain HTTP status semantics — `mcp/httpServer.ts` is also untouched.
+using plain HTTP status semantics — `mcp/httpServer.ts` is untouched.
 `server.ts` calls `observeMcpTransportMetrics` on the MCP HTTP server
-alongside its existing startup wiring.
-**Acceptance criteria:** New `mcpToolMetrics.test.ts` asserts `withToolMetrics`
-records the duration histogram with correct `tool`/`outcome` for a plain
-success, a `withToolErrors`-shaped error result (mapped error code), and an
-`isError` result with no code (falls back to `"error"`). New
-`mcpTransportMetrics.test.ts` starts a real `createMcpHttpServer` instance
-and asserts `mailtool.mcp.request.duration` is recorded with `outcome: "ok"`
-for a real `POST /mcp` `initialize` call and `outcome: "error"` for a
-transport-level failure (`GET /mcp` → 405). All 8 existing MCP tool test
-files pass unmodified. `git diff origin/main -- src/mcp/errors.ts
-src/mcp/httpServer.ts src/mcp/server.ts` is empty.
+alongside its existing startup wiring. Per-tool duration
+(`mailtool.mcp.tool.duration`) was implemented and then dropped before
+merging — see the "Dropped `mailtool.mcp.tool.duration`" design decision
+above. `mcp/tools/*.ts` and `mcp/errors.ts` are consequently untouched by
+this task entirely.
+**Acceptance criteria:** New `mcpTransportMetrics.test.ts` starts a real
+`createMcpHttpServer` instance and asserts `mailtool.mcp.request.duration`
+is recorded with `outcome: "ok"` for a real `POST /mcp` `initialize` call
+and `outcome: "error"` for a transport-level failure (`GET /mcp` → 405).
+All 8 existing MCP tool test files pass unmodified. `git diff origin/main
+-- src/mcp/errors.ts src/mcp/httpServer.ts src/mcp/server.ts src/mcp/tools/`
+is empty.
 
 #### Task 6 — Docs
 **Description:** New `docs/metrics.md`: the full metrics catalog (name,

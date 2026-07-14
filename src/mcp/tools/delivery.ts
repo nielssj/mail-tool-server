@@ -3,7 +3,6 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../../services/mailboxService.js';
 import { sanitizeFilename, ObjectStorageNotConfiguredError, type BlobStore } from '../../storage/blobStore.js';
 import { NotFoundError, withToolErrors } from '../errors.js';
-import { withToolMetrics } from '../../telemetry/mcpToolMetrics.js';
 
 export type DeliveryToolsOptions = {
   mailboxService: MailboxService;
@@ -66,45 +65,42 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       outputSchema: StagedBlobSchema,
       annotations: { readOnlyHint: true }
     },
-    withToolMetrics(
-      'get_attachment',
-      withToolErrors(async ({ accountId, mailbox, uid, partId }: GetAttachmentArgs) => {
-        const blobStore = requireBlobStore(options.blobStore);
-        const attachment = await options.mailboxService.getAttachment(accountId, mailbox, uid, partId);
-        if (!attachment) {
-          throw new NotFoundError(
-            `Attachment not found: uid ${uid}, part "${partId}" in mailbox "${mailbox}"`
-          );
-        }
+    withToolErrors(async ({ accountId, mailbox, uid, partId }: GetAttachmentArgs) => {
+      const blobStore = requireBlobStore(options.blobStore);
+      const attachment = await options.mailboxService.getAttachment(accountId, mailbox, uid, partId);
+      if (!attachment) {
+        throw new NotFoundError(
+          `Attachment not found: uid ${uid}, part "${partId}" in mailbox "${mailbox}"`
+        );
+      }
 
-        const filename = sanitizeFilename(attachment.filename, `attachment-${partId}`);
-        const staged = await blobStore.stage({
-          body: attachment.content,
-          contentType: attachment.mimeType,
-          filename,
-          kind: 'attachment'
-        });
+      const filename = sanitizeFilename(attachment.filename, `attachment-${partId}`);
+      const staged = await blobStore.stage({
+        body: attachment.content,
+        contentType: attachment.mimeType,
+        filename,
+        kind: 'attachment'
+      });
 
-        const result = {
-          url: staged.url,
-          filename,
-          mimeType: attachment.mimeType,
-          sizeBytes: attachment.sizeBytes,
-          expiresAt: staged.expiresAt,
-          hint: DOWNLOAD_HINT
-        };
+      const result = {
+        url: staged.url,
+        filename,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        expiresAt: staged.expiresAt,
+        hint: DOWNLOAD_HINT
+      };
 
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Staged "${filename}" (${attachment.mimeType}, ${attachment.sizeBytes} bytes). Expires ${staged.expiresAt}.`
-            }
-          ],
-          structuredContent: result
-        };
-      })
-    )
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Staged "${filename}" (${attachment.mimeType}, ${attachment.sizeBytes} bytes). Expires ${staged.expiresAt}.`
+          }
+        ],
+        structuredContent: result
+      };
+    })
   );
 
   server.registerTool(
@@ -121,42 +117,39 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       outputSchema: StagedBlobSchema,
       annotations: { readOnlyHint: true }
     },
-    withToolMetrics(
-      'export_message',
-      withToolErrors(async ({ accountId, mailbox, uid }: ExportMessageArgs) => {
-        const blobStore = requireBlobStore(options.blobStore);
-        const source = await options.mailboxService.getRawSource(accountId, mailbox, uid);
-        if (!source) {
-          throw new NotFoundError(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
-        }
+    withToolErrors(async ({ accountId, mailbox, uid }: ExportMessageArgs) => {
+      const blobStore = requireBlobStore(options.blobStore);
+      const source = await options.mailboxService.getRawSource(accountId, mailbox, uid);
+      if (!source) {
+        throw new NotFoundError(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
+      }
 
-        const filename = sanitizeFilename(undefined, `message-${uid}.eml`);
-        const staged = await blobStore.stage({
-          body: source,
-          contentType: 'message/rfc822',
-          filename,
-          kind: 'message'
-        });
+      const filename = sanitizeFilename(undefined, `message-${uid}.eml`);
+      const staged = await blobStore.stage({
+        body: source,
+        contentType: 'message/rfc822',
+        filename,
+        kind: 'message'
+      });
 
-        const result = {
-          url: staged.url,
-          filename,
-          mimeType: 'message/rfc822',
-          sizeBytes: source.length,
-          expiresAt: staged.expiresAt,
-          hint: DOWNLOAD_HINT
-        };
+      const result = {
+        url: staged.url,
+        filename,
+        mimeType: 'message/rfc822',
+        sizeBytes: source.length,
+        expiresAt: staged.expiresAt,
+        hint: DOWNLOAD_HINT
+      };
 
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Staged message ${uid} as "${filename}". Expires ${staged.expiresAt}.`
-            }
-          ],
-          structuredContent: result
-        };
-      })
-    )
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Staged message ${uid} as "${filename}". Expires ${staged.expiresAt}.`
+          }
+        ],
+        structuredContent: result
+      };
+    })
   );
 };

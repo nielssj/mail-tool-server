@@ -3,7 +3,6 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../../services/mailboxService.js';
 import { DEFAULT_BODY_CAP_CHARS, formatMessageBody, formatMessageSummary } from '../format.js';
 import { NotFoundError, withToolErrors } from '../errors.js';
-import { withToolMetrics } from '../../telemetry/mcpToolMetrics.js';
 
 export type MessageToolsOptions = {
   mailboxService: MailboxService;
@@ -74,23 +73,20 @@ export const registerMessageTools = (server: McpServer, options: MessageToolsOpt
       outputSchema: { messages: z.array(MessageSummarySchema) },
       annotations: { readOnlyHint: true }
     },
-    withToolMetrics(
-      'list_messages',
-      withToolErrors(async ({ accountId, mailbox, limit, sinceUid }: ListMessagesArgs) => {
-        const raw = await options.mailboxService.listMessages(accountId, mailbox, {
-          limit: limit ?? DEFAULT_LIST_LIMIT,
-          sinceUid
-        });
-        const messages = raw.map(formatMessageSummary);
+    withToolErrors(async ({ accountId, mailbox, limit, sinceUid }: ListMessagesArgs) => {
+      const raw = await options.mailboxService.listMessages(accountId, mailbox, {
+        limit: limit ?? DEFAULT_LIST_LIMIT,
+        sinceUid
+      });
+      const messages = raw.map(formatMessageSummary);
 
-        return {
-          content: [
-            { type: 'text' as const, text: `Found ${messages.length} message(s) in "${mailbox}".` }
-          ],
-          structuredContent: { messages }
-        };
-      })
-    )
+      return {
+        content: [
+          { type: 'text' as const, text: `Found ${messages.length} message(s) in "${mailbox}".` }
+        ],
+        structuredContent: { messages }
+      };
+    })
   );
 
   server.registerTool(
@@ -116,35 +112,32 @@ export const registerMessageTools = (server: McpServer, options: MessageToolsOpt
       },
       annotations: { readOnlyHint: true }
     },
-    withToolMetrics(
-      'get_message',
-      withToolErrors(async ({ accountId, mailbox, uid }: GetMessageArgs) => {
-        const message = await options.mailboxService.getMessage(accountId, mailbox, uid);
-        if (!message) {
-          throw new NotFoundError(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
-        }
+    withToolErrors(async ({ accountId, mailbox, uid }: GetMessageArgs) => {
+      const message = await options.mailboxService.getMessage(accountId, mailbox, uid);
+      if (!message) {
+        throw new NotFoundError(`Message not found: uid ${uid} in mailbox "${mailbox}"`);
+      }
 
-        const formatted = formatMessageBody(message);
-        const result = {
-          ...formatted,
-          ...(formatted.truncated
-            ? {
-                hint: `Body truncated at ${DEFAULT_BODY_CAP_CHARS} characters; call export_message for the full content.`
-              }
-            : {})
-        };
+      const formatted = formatMessageBody(message);
+      const result = {
+        ...formatted,
+        ...(formatted.truncated
+          ? {
+              hint: `Body truncated at ${DEFAULT_BODY_CAP_CHARS} characters; call export_message for the full content.`
+            }
+          : {})
+      };
 
-        const summary = [
-          `Subject: "${result.subject ?? '(no subject)'}" from ${result.from ?? '(unknown sender)'}.`,
-          `Body ${result.truncated ? `truncated at ${DEFAULT_BODY_CAP_CHARS} characters` : `(${result.body.length} chars)`}.`,
-          `${result.attachments.length} attachment(s).`
-        ].join(' ');
+      const summary = [
+        `Subject: "${result.subject ?? '(no subject)'}" from ${result.from ?? '(unknown sender)'}.`,
+        `Body ${result.truncated ? `truncated at ${DEFAULT_BODY_CAP_CHARS} characters` : `(${result.body.length} chars)`}.`,
+        `${result.attachments.length} attachment(s).`
+      ].join(' ');
 
-        return {
-          content: [{ type: 'text' as const, text: summary }],
-          structuredContent: result
-        };
-      })
-    )
+      return {
+        content: [{ type: 'text' as const, text: summary }],
+        structuredContent: result
+      };
+    })
   );
 };

@@ -3,7 +3,6 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MailboxService } from '../../services/mailboxService.js';
 import type { AccountConfig } from '../../utils/config/schema.js';
 import { withToolErrors } from '../errors.js';
-import { withToolMetrics } from '../../telemetry/mcpToolMetrics.js';
 
 export type AccountToolsOptions = {
   mailboxService: MailboxService;
@@ -38,21 +37,18 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
       outputSchema: { accounts: z.array(AccountSummarySchema) },
       annotations: { readOnlyHint: true }
     },
-    withToolMetrics(
-      'list_accounts',
-      withToolErrors(async () => {
-        const accounts = options.accounts.map((account) => ({
-          id: account.id,
-          host: account.host,
-          watchMailboxes: account.watchMailboxes
-        }));
+    withToolErrors(async () => {
+      const accounts = options.accounts.map((account) => ({
+        id: account.id,
+        host: account.host,
+        watchMailboxes: account.watchMailboxes
+      }));
 
-        return {
-          content: [{ type: 'text' as const, text: `Found ${accounts.length} account(s).` }],
-          structuredContent: { accounts }
-        };
-      })
-    )
+      return {
+        content: [{ type: 'text' as const, text: `Found ${accounts.length} account(s).` }],
+        structuredContent: { accounts }
+      };
+    })
   );
 
   server.registerTool(
@@ -66,28 +62,25 @@ export const registerAccountTools = (server: McpServer, options: AccountToolsOpt
       outputSchema: { mailboxes: z.array(MailboxSummarySchema) },
       annotations: { readOnlyHint: true }
     },
-    withToolMetrics(
-      'list_mailboxes',
-      withToolErrors(async ({ accountId }: { accountId: string }) => {
-        const list = await options.mailboxService.listMailboxes(accountId);
-        const mailboxes = list.map((mailbox) => ({
-          path: mailbox.path,
-          name: mailbox.name,
-          delimiter: mailbox.delimiter,
-          flags: Array.from(mailbox.flags),
-          specialUse: mailbox.specialUse
-        }));
+    withToolErrors(async ({ accountId }: { accountId: string }) => {
+      const list = await options.mailboxService.listMailboxes(accountId);
+      const mailboxes = list.map((mailbox) => ({
+        path: mailbox.path,
+        name: mailbox.name,
+        delimiter: mailbox.delimiter,
+        flags: Array.from(mailbox.flags),
+        specialUse: mailbox.specialUse
+      }));
 
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Found ${mailboxes.length} mailbox(es) in account "${accountId}".`
-            }
-          ],
-          structuredContent: { mailboxes }
-        };
-      })
-    )
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Found ${mailboxes.length} mailbox(es) in account "${accountId}".`
+          }
+        ],
+        structuredContent: { mailboxes }
+      };
+    })
   );
 };
