@@ -91,6 +91,7 @@ export type MailboxClient = {
 };
 
 export type MailboxClientConstructor = new (options: {
+  id: string;
   host: string;
   port: number;
   secure: boolean;
@@ -194,6 +195,7 @@ const withClient = async <T>(
   fn: (client: MailboxClient) => Promise<T>
 ): Promise<T> => {
   const client = new ctor({
+    id: account.id,
     host: account.host,
     port: account.port,
     secure: account.secure,

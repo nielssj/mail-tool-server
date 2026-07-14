@@ -1,12 +1,19 @@
 import type { Server as HttpServer } from 'node:http';
+import { ImapFlow } from 'imapflow';
 import { buildApp } from './app.js';
 import { loadConfig } from './utils/config/load.js';
 import { createLogger } from './utils/logger.js';
 import { AccountWatcher } from './imap/watcher.js';
 import { createDispatcher, subscribeWatcher } from './events/dispatcher.js';
-import { createMailboxService, type MailboxService } from './services/mailboxService.js';
+import {
+  createMailboxService,
+  type MailboxClientConstructor,
+  type MailboxService
+} from './services/mailboxService.js';
 import { createBlobStore, type BlobStore } from './storage/blobStore.js';
 import { createMcpHttpServer } from './mcp/httpServer.js';
+import { withConnectionMetrics } from './telemetry/imapConnectionMetrics.js';
+import { withMailboxOperationMetrics } from './telemetry/mailboxOperationMetrics.js';
 import type { AccountConfig } from './utils/config/schema.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
@@ -61,7 +68,13 @@ const start = async (): Promise<void> => {
   const { accounts, objectStorage } = config;
 
   const watchers = accounts.map((account) => new AccountWatcher(account));
-  const mailboxService = createMailboxService(accounts);
+  const MailboxClientCtor = withConnectionMetrics(
+    ImapFlow as unknown as MailboxClientConstructor
+  );
+  const mailboxService = withMailboxOperationMetrics(
+    createMailboxService(accounts, { MailboxClientCtor }),
+    accounts
+  );
   const blobStore = objectStorage ? createBlobStore(objectStorage) : undefined;
 
   for (let i = 0; i < accounts.length; i++) {
