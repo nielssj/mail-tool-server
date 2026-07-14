@@ -50,9 +50,20 @@ src/
                       and named — call sites import the instrument, they
                       never call meter.createXxx() inline. Prevents drift
                       in naming/units/attribute keys across call sites.
-  services/mailboxService.ts   wraps each operation + the shared IMAP
-                                connection helper to record operation and
-                                connection metrics.
+    mailboxOperationMetrics.ts   withMailboxOperationMetrics(service, accounts)
+                      — decorates a MailboxService object to record
+                      mailtool.mailbox.operation.duration around every
+                      call. mailboxService.ts itself is untouched.
+    imapConnectionMetrics.ts   withConnectionMetrics(ctor) — decorates a
+                      MailboxClientConstructor to record
+                      mailtool.imap.connection.duration/.errors around
+                      connect(); every other MailboxClient method is
+                      delegated through unchanged.
+  server.ts   the composition root: wraps ImapFlow with
+              withConnectionMetrics before handing it to
+              createMailboxService, then wraps the resulting service with
+              withMailboxOperationMetrics — mailboxService.ts and the real
+              IMAP client stay fully telemetry-free.
   imap/watcher.ts               records domain event counters + registers
                                  observable gauges for connection state and
                                  per-mailbox message counts.
@@ -95,18 +106,34 @@ inside it.
   that looks like it could be local business-logic state (raised in review
   on Task 2's PR).
 
-- **Instrumentation logic that's more than a one-line call at the recording
-  site lives in its own module under `telemetry/`, not inline in the
-  business-logic file it instruments.** Task 2's outcome-classification +
-  wrapper logic (`recordMailboxOperation`) was initially written directly in
-  `mailboxService.ts`; review feedback moved it to
-  `telemetry/mailboxOperationMetrics.ts` since it was adding a lot of
-  utility boilerplate to an already-long file. Where this creates a
-  potential circular import (e.g. the extracted module needing to recognize
-  error types defined in the file it instruments), prefer matching on
-  `error.name` over `instanceof` rather than importing the error class back
-  in — both `ReadOnlyAccountError` and `ImapConnectionError` already set
-  `this.name` in their constructors for exactly this kind of use.
+- **Decorate from the outside; don't touch the instrumented file at all.**
+  Task 2 went through two revisions. First pass: a `recordMailboxOperation`
+  wrapper called *from inside* `mailboxService.ts`, moved to its own file
+  after review flagged it as too much utility boilerplate inline in an
+  already-long file. Second pass, on further review: even calling into a
+  telemetry helper from inside `mailboxService.ts` was more coupling than
+  necessary, since every `MailboxService` method already shares the same
+  `(accountId: string, ...) => Promise<T>` shape. The final design is a pair
+  of decorators applied once at the composition root (`server.ts`), and
+  `mailboxService.ts` carries zero telemetry imports or awareness:
+  - `withMailboxOperationMetrics(service, accounts)` wraps the returned
+    `MailboxService` object method-by-method (generic over the shared
+    `(accountId, ...)` shape), recording
+    `mailtool.mailbox.operation.duration`.
+  - `withConnectionMetrics(ctor)` wraps a `MailboxClientConstructor`,
+    delegating every `MailboxClient` method to the real client except
+    `connect()`, which it times and classifies before delegating.
+  Both need to recognize `ReadOnlyAccountError`/`ImapConnectionError`
+  without importing them (importing back into `mailboxService.ts` would be
+  circular, since `server.ts` now imports the decorators, not the other way
+  around) — they match on `error.name` instead of `instanceof`; both error
+  classes already set `this.name` in their constructors for exactly this
+  kind of use. The one unavoidable touch point: `MailboxClientConstructor`'s
+  options gained a required `id: string` field (the account id), passed
+  through by `mailboxService.ts`'s existing `withClient` helper, purely so
+  the connection decorator can label its measurements — not telemetry logic
+  itself, just exposing account identity to whatever client gets
+  constructed.
 
 - **No generic HTTP request-rate/latency/error metrics for the plain HTTP
   API in this pass.** No `api/metricsPlugin.ts`, no `http.server.*`
@@ -145,10 +172,11 @@ inside it.
 - **Instrument once at a shared seam, no `surface` attribute.**
   `mailboxService` is the single core both the HTTP routes and the MCP tools
   call through (per the existing "thin adapter, reuse don't reimplement"
-  principle from the MCP proposal) — instrumenting `mailboxService` itself
-  means operation metrics are correct and consistent for both without
-  duplicating instrumentation in eight route files and eight tool files.
-  `mailtool.mailbox.operation.duration` does **not** carry a `surface`
+  principle from the MCP proposal) — decorating the `MailboxService` object
+  once (in `server.ts`, before it's handed to either the HTTP routes or the
+  MCP tools) means operation metrics are correct and consistent for both
+  without duplicating instrumentation in eight route files and eight tool
+  files. `mailtool.mailbox.operation.duration` does **not** carry a `surface`
   (`http`/`mcp`) attribute: adding one would mean threading a new parameter
   through every HTTP route and MCP tool call site into `mailboxService`'s
   signature, which isn't worth the churn — this metric intentionally can't
@@ -179,14 +207,14 @@ inside it.
 | --- | --- | --- | --- | --- |
 | `mailtool.mcp.request.duration` | Histogram | s | `outcome` (`ok`\|`error`) | `mcp/httpServer.ts` (`POST /mcp`, transport-level) |
 | `mailtool.mcp.tool.duration` | Histogram | s | `tool`, `outcome` (`ok`\|error code from `errors.ts`) | `mcp/errors.ts` wrapper |
-| `mailtool.imap.connection.duration` | Histogram | s | `account.id`, `outcome` (`ok`\|`error`) | `mailboxService`'s `withClient` |
-| `mailtool.imap.connection.errors` | Counter | {error} | `account.id` | `mailboxService`'s `withClient` |
+| `mailtool.imap.connection.duration` | Histogram | s | `account.id`, `outcome` (`ok`\|`error`) | `telemetry/imapConnectionMetrics.ts`'s `withConnectionMetrics` |
+| `mailtool.imap.connection.errors` | Counter | {error} | `account.id` | `telemetry/imapConnectionMetrics.ts`'s `withConnectionMetrics` |
 
 **Domain-specific**
 
 | Name | Type | Unit | Attributes | Source |
 | --- | --- | --- | --- | --- |
-| `mailtool.mailbox.operation.duration` | Histogram | s | `account.id`, `operation` (`list_mailboxes`\|`list_messages`\|`get_message`\|`get_attachment`\|`get_raw_source`\|`move_message`\|`set_flags`), `outcome` | `mailboxService` wrapper |
+| `mailtool.mailbox.operation.duration` | Histogram | s | `account.id`, `operation` (`list_mailboxes`\|`list_messages`\|`get_message`\|`get_attachment`\|`get_raw_source`\|`move_message`\|`set_flags`), `outcome` | `telemetry/mailboxOperationMetrics.ts`'s `withMailboxOperationMetrics` |
 | `mailtool.watcher.events` | Counter | {event} | `account.id`, `mailbox`, `event` (`newMail`\|`flagsChanged`\|`mailRemoved`) | `imap/watcher.ts` handlers |
 | `mailtool.watcher.new_mail.messages` | Counter | {message} | `account.id`, `mailbox` | `imap/watcher.ts` `handleExists` (incremented by `count - previousCount`, not just 1 per event) |
 | `mailtool.watcher.reconnects` | Counter | {reconnect} | `account.id` | `imap/watcher.ts` `handleConnectionDrop`/`reconnect` |
@@ -227,17 +255,32 @@ call sites changed yet).
 
 #### Task 2 — Mailbox service / IMAP connection metrics
 **Status:** DONE
-**Description:** Extend `mailboxService`'s `withClient` helper to record
-`mailtool.imap.connection.duration`/`mailtool.imap.connection.errors`, and
-wrap each of the seven service methods to record
-`mailtool.mailbox.operation.duration` with `operation`/`outcome` attributes.
-No signature changes to `mailboxService`'s public methods — instrumentation
-wraps the existing implementations internally.
-**Acceptance criteria:** Unit tests (mocked `ImapFlow`, existing pattern)
-assert each of the 7 operations records the duration histogram with the
-correct `operation`/`outcome` for a success case, a not-found case, and a
-thrown-error case; connection metrics recorded on both connect success and
-`ImapConnectionError`.
+**Description:** `mailboxService.ts` itself is untouched except one field:
+`MailboxClientConstructor`'s options gain a required `id: string` (the
+account id), passed through by the existing `withClient` helper — plumbing,
+not telemetry. Two decorators in `telemetry/` do the actual instrumentation:
+`mailboxOperationMetrics.ts` exports `withMailboxOperationMetrics(service,
+accounts)`, wrapping a `MailboxService` object method-by-method to record
+`mailtool.mailbox.operation.duration` with `operation`/`outcome` attributes
+(generic over all 7 methods, since they share the same `(accountId, ...)`
+shape); `imapConnectionMetrics.ts` exports `withConnectionMetrics(ctor)`,
+wrapping a `MailboxClientConstructor` to record
+`mailtool.imap.connection.duration`/`.errors` around `connect()`, delegating
+every other `MailboxClient` method unchanged. `server.ts` (the composition
+root) applies both: `withConnectionMetrics(ImapFlow)` is handed to
+`createMailboxService` as the client constructor, and the resulting service
+is wrapped in `withMailboxOperationMetrics` before being passed to the HTTP
+routes and MCP tools.
+**Acceptance criteria:** Unit tests for `withMailboxOperationMetrics` (against
+a trivial fake `MailboxService`, no IMAP mocking needed) assert the duration
+histogram records the correct `operation`/`outcome` for a success case per
+operation, a not-found case (`false` return), an out-of-bounds accountId
+(labeled `"unknown"`), a `read_only` case, an `imap_connection_error` case,
+and a generic `error` case. Unit tests for `withConnectionMetrics` (against a
+trivial fake constructor) assert connection success/failure recording and
+that every other `MailboxClient` method still delegates through correctly.
+`mailboxService.test.ts` (Task 4 of the base proposal) passes unmodified,
+confirming zero behavior change to the service itself.
 
 #### Task 3 — Watcher domain metrics
 **Description:** In `imap/watcher.ts`, record `mailtool.watcher.events` and

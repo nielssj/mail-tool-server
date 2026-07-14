@@ -10,8 +10,6 @@ import type {
 } from 'imapflow';
 import type { AccountConfig } from '../utils/config/schema.js';
 import { ImapConnectionError } from '../imap/clientFactory.js';
-import * as telemetry from '../telemetry/instruments.js';
-import { recordMailboxOperation } from '../telemetry/mailboxOperationMetrics.js';
 
 export type { ListResponse, FetchMessageObject };
 
@@ -93,6 +91,11 @@ export type MailboxClient = {
 };
 
 export type MailboxClientConstructor = new (options: {
+  /** The configured account this client connects as — not used by the
+   * IMAP client itself, but exposed so a decorator (e.g. a connection
+   * metrics wrapper) can label its measurements without mailboxService.ts
+   * needing any telemetry awareness. */
+  id: string;
   host: string;
   port: number;
   secure: boolean;
@@ -196,6 +199,7 @@ const withClient = async <T>(
   fn: (client: MailboxClient) => Promise<T>
 ): Promise<T> => {
   const client = new ctor({
+    id: account.id,
     host: account.host,
     port: account.port,
     secure: account.secure,
@@ -203,24 +207,14 @@ const withClient = async <T>(
     logger: false
   });
 
-  const connectStart = performance.now();
   try {
     await client.connect();
   } catch (error) {
-    telemetry.imapConnectionDuration.record((performance.now() - connectStart) / 1000, {
-      'account.id': account.id,
-      outcome: 'error'
-    });
-    telemetry.imapConnectionErrors.add(1, { 'account.id': account.id });
     throw new ImapConnectionError(
       `Failed to connect to IMAP account "${account.id}"`,
       { cause: error as Error }
     );
   }
-  telemetry.imapConnectionDuration.record((performance.now() - connectStart) / 1000, {
-    'account.id': account.id,
-    outcome: 'ok'
-  });
 
   try {
     return await fn(client);
@@ -333,165 +327,162 @@ export const createMailboxService = (
   const ctor =
     options.MailboxClientCtor ?? (ImapFlow as unknown as MailboxClientConstructor);
 
-  const resolveAccount = (accountId: string): AccountConfig => findAccount(accounts, accountId);
+  const listMailboxes = async (accountId: string): Promise<ListResponse[]> => {
+    const account = findAccount(accounts, accountId);
+    return withClient(account, ctor, (client) => client.list());
+  };
 
-  const listMailboxes = (accountId: string): Promise<ListResponse[]> =>
-    recordMailboxOperation('list_mailboxes', accountId, resolveAccount, (account) =>
-      withClient(account, ctor, (client) => client.list())
-    );
-
-  const listMessages = (
+  const listMessages = async (
     accountId: string,
     mailbox: string,
     opts: ListMessagesOptions = {}
-  ): Promise<FetchMessageObject[]> =>
-    recordMailboxOperation('list_messages', accountId, resolveAccount, (account) =>
-      withClient(account, ctor, async (client) => {
-        await client.mailboxOpen(mailbox);
-        const range = opts.sinceUid != null ? `${opts.sinceUid}:*` : '1:*';
-        const all = await client.fetchAll(range, LIST_FETCH_QUERY, { uid: true });
-        if (opts.limit != null && all.length > opts.limit) {
-          return all.slice(-opts.limit);
-        }
-        return all;
-      })
-    );
+  ): Promise<FetchMessageObject[]> => {
+    const account = findAccount(accounts, accountId);
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      const range = opts.sinceUid != null ? `${opts.sinceUid}:*` : '1:*';
+      const all = await client.fetchAll(range, LIST_FETCH_QUERY, { uid: true });
+      if (opts.limit != null && all.length > opts.limit) {
+        return all.slice(-opts.limit);
+      }
+      return all;
+    });
+  };
 
-  const getMessage = (
+  const getMessage = async (
     accountId: string,
     mailbox: string,
     uid: number
-  ): Promise<MessageDetail | false> =>
-    recordMailboxOperation('get_message', accountId, resolveAccount, (account) =>
-      withClient(account, ctor, async (client) => {
-        await client.mailboxOpen(mailbox);
-        const message = await client.fetchOne(String(uid), DETAIL_FETCH_QUERY, {
-          uid: true
-        });
-        if (!message) {
-          return false;
+  ): Promise<MessageDetail | false> => {
+    const account = findAccount(accounts, accountId);
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      const message = await client.fetchOne(String(uid), DETAIL_FETCH_QUERY, {
+        uid: true
+      });
+      if (!message) {
+        return false;
+      }
+
+      let body = '';
+      let attachments: MessageAttachment[] = [];
+
+      if (message.bodyStructure) {
+        const textPart = findPreferredTextPart(message.bodyStructure);
+        if (textPart) {
+          const downloaded = await client.download(String(uid), textPart.part ?? '1', {
+            uid: true
+          });
+          body = await streamToString(downloaded.content);
         }
+        attachments = collectAttachments(message.bodyStructure, textPart);
+      }
 
-        let body = '';
-        let attachments: MessageAttachment[] = [];
+      return { ...message, body, attachments };
+    });
+  };
 
-        if (message.bodyStructure) {
-          const textPart = findPreferredTextPart(message.bodyStructure);
-          if (textPart) {
-            const downloaded = await client.download(String(uid), textPart.part ?? '1', {
-              uid: true
-            });
-            body = await streamToString(downloaded.content);
-          }
-          attachments = collectAttachments(message.bodyStructure, textPart);
-        }
-
-        return { ...message, body, attachments };
-      })
-    );
-
-  const getAttachment = (
+  const getAttachment = async (
     accountId: string,
     mailbox: string,
     uid: number,
     partId: string
-  ): Promise<AttachmentContent | false> =>
-    recordMailboxOperation('get_attachment', accountId, resolveAccount, (account) =>
-      withClient(account, ctor, async (client) => {
-        await client.mailboxOpen(mailbox);
-        const message = await client.fetchOne(
-          String(uid),
-          { uid: true, bodyStructure: true },
-          { uid: true }
-        );
-        if (!message || !message.bodyStructure) {
-          return false;
-        }
+  ): Promise<AttachmentContent | false> => {
+    const account = findAccount(accounts, accountId);
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      const message = await client.fetchOne(
+        String(uid),
+        { uid: true, bodyStructure: true },
+        { uid: true }
+      );
+      if (!message || !message.bodyStructure) {
+        return false;
+      }
 
-        const node = findNodeByPart(message.bodyStructure, partId);
-        if (!node) {
-          return false;
-        }
+      const node = findNodeByPart(message.bodyStructure, partId);
+      if (!node) {
+        return false;
+      }
 
-        if (node.size != null && node.size > MAX_FETCH_BYTES) {
-          throw tooLargeError('Attachment part', partId, node.size);
-        }
+      if (node.size != null && node.size > MAX_FETCH_BYTES) {
+        throw tooLargeError('Attachment part', partId, node.size);
+      }
 
-        const downloaded = await client.download(String(uid), partId, { uid: true });
-        const content = await streamToBuffer(downloaded.content);
+      const downloaded = await client.download(String(uid), partId, { uid: true });
+      const content = await streamToBuffer(downloaded.content);
 
-        return {
-          filename:
-            downloaded.meta.filename ?? node.dispositionParameters?.filename ?? node.parameters?.name,
-          mimeType: downloaded.meta.contentType || node.type,
-          sizeBytes: content.length,
-          content
-        };
-      })
-    );
+      return {
+        filename: downloaded.meta.filename ?? node.dispositionParameters?.filename ?? node.parameters?.name,
+        mimeType: downloaded.meta.contentType || node.type,
+        sizeBytes: content.length,
+        content
+      };
+    });
+  };
 
-  const getRawSource = (
+  const getRawSource = async (
     accountId: string,
     mailbox: string,
     uid: number
-  ): Promise<Buffer | false> =>
-    recordMailboxOperation('get_raw_source', accountId, resolveAccount, (account) =>
-      withClient(account, ctor, async (client) => {
-        await client.mailboxOpen(mailbox);
+  ): Promise<Buffer | false> => {
+    const account = findAccount(accounts, accountId);
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
 
-        const meta = await client.fetchOne(String(uid), { uid: true, size: true }, { uid: true });
-        if (!meta) {
-          return false;
-        }
-        if (meta.size != null && meta.size > MAX_FETCH_BYTES) {
-          throw tooLargeError('Message', uid, meta.size);
-        }
+      const meta = await client.fetchOne(String(uid), { uid: true, size: true }, { uid: true });
+      if (!meta) {
+        return false;
+      }
+      if (meta.size != null && meta.size > MAX_FETCH_BYTES) {
+        throw tooLargeError('Message', uid, meta.size);
+      }
 
-        const message = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
-        if (!message || !message.source) {
-          return false;
-        }
-        return message.source;
-      })
-    );
+      const message = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
+      if (!message || !message.source) {
+        return false;
+      }
+      return message.source;
+    });
+  };
 
-  const moveMessage = (
+  const moveMessage = async (
     accountId: string,
     mailbox: string,
     uid: number,
     destination: string
-  ): Promise<CopyResponseObject | false> =>
-    recordMailboxOperation('move_message', accountId, resolveAccount, (account) => {
-      if (account.readOnly) {
-        throw new ReadOnlyAccountError(accountId, 'move_message');
-      }
-      return withClient(account, ctor, async (client) => {
-        await client.mailboxOpen(mailbox);
-        return client.messageMove(String(uid), destination, { uid: true });
-      });
+  ): Promise<CopyResponseObject | false> => {
+    const account = findAccount(accounts, accountId);
+    if (account.readOnly) {
+      throw new ReadOnlyAccountError(accountId, 'move_message');
+    }
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      return client.messageMove(String(uid), destination, { uid: true });
     });
+  };
 
-  const setFlags = (
+  const setFlags = async (
     accountId: string,
     mailbox: string,
     uid: number,
     add: string[],
     remove: string[]
-  ): Promise<void> =>
-    recordMailboxOperation('set_flags', accountId, resolveAccount, (account) => {
-      if (account.readOnly) {
-        throw new ReadOnlyAccountError(accountId, 'set_flags');
+  ): Promise<void> => {
+    const account = findAccount(accounts, accountId);
+    if (account.readOnly) {
+      throw new ReadOnlyAccountError(accountId, 'set_flags');
+    }
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      if (add.length > 0) {
+        await client.messageFlagsAdd(String(uid), add, { uid: true });
       }
-      return withClient(account, ctor, async (client) => {
-        await client.mailboxOpen(mailbox);
-        if (add.length > 0) {
-          await client.messageFlagsAdd(String(uid), add, { uid: true });
-        }
-        if (remove.length > 0) {
-          await client.messageFlagsRemove(String(uid), remove, { uid: true });
-        }
-      });
+      if (remove.length > 0) {
+        await client.messageFlagsRemove(String(uid), remove, { uid: true });
+      }
     });
+  };
 
   return {
     listMailboxes,
