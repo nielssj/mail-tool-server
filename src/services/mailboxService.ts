@@ -91,10 +91,6 @@ export type MailboxClient = {
 };
 
 export type MailboxClientConstructor = new (options: {
-  /** The configured account this client connects as — not used by the
-   * IMAP client itself, but exposed so a decorator (e.g. a connection
-   * metrics wrapper) can label its measurements without mailboxService.ts
-   * needing any telemetry awareness. */
   id: string;
   host: string;
   port: number;

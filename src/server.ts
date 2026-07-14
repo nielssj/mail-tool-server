@@ -68,11 +68,11 @@ const start = async (): Promise<void> => {
   const { accounts, objectStorage } = config;
 
   const watchers = accounts.map((account) => new AccountWatcher(account));
-  const instrumentedCtor = withConnectionMetrics(
+  const MailboxClientCtor = withConnectionMetrics(
     ImapFlow as unknown as MailboxClientConstructor
   );
   const mailboxService = withMailboxOperationMetrics(
-    createMailboxService(accounts, { MailboxClientCtor: instrumentedCtor }),
+    createMailboxService(accounts, { MailboxClientCtor }),
     accounts
   );
   const blobStore = objectStorage ? createBlobStore(objectStorage) : undefined;
