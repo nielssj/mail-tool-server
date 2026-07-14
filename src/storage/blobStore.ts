@@ -38,6 +38,8 @@ export type StageBlobInput = {
   contentType?: string;
   /** Already-sanitized filename, used for the download's Content-Disposition. */
   filename: string;
+  /** What's being staged — not used by the store itself. */
+  kind: 'attachment' | 'message';
 };
 
 export type StagedBlob = {

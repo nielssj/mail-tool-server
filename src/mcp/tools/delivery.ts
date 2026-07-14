@@ -78,7 +78,8 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       const staged = await blobStore.stage({
         body: attachment.content,
         contentType: attachment.mimeType,
-        filename
+        filename,
+        kind: 'attachment'
       });
 
       const result = {
@@ -127,7 +128,8 @@ export const registerDeliveryTools = (server: McpServer, options: DeliveryToolsO
       const staged = await blobStore.stage({
         body: source,
         contentType: 'message/rfc822',
-        filename
+        filename,
+        kind: 'message'
       });
 
       const result = {

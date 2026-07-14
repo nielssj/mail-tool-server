@@ -15,6 +15,8 @@ import { createMcpHttpServer } from './mcp/httpServer.js';
 import { withConnectionMetrics } from './telemetry/imapConnectionMetrics.js';
 import { withMailboxOperationMetrics } from './telemetry/mailboxOperationMetrics.js';
 import { observeWatcherMetrics, unobserveWatcherMetrics } from './telemetry/watcherMetrics.js';
+import { withDispatcherMetrics } from './telemetry/dispatcherMetrics.js';
+import { withBlobStoreMetrics } from './telemetry/blobStoreMetrics.js';
 import type { AccountConfig } from './utils/config/schema.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
@@ -76,12 +78,12 @@ const start = async (): Promise<void> => {
     createMailboxService(accounts, { MailboxClientCtor }),
     accounts
   );
-  const blobStore = objectStorage ? createBlobStore(objectStorage) : undefined;
+  const blobStore = objectStorage ? withBlobStoreMetrics(createBlobStore(objectStorage)) : undefined;
 
   for (let i = 0; i < accounts.length; i++) {
     const account = accounts[i]!;
     const watcher = watchers[i]!;
-    const dispatchers = account.dispatchers.map((d) => createDispatcher(d));
+    const dispatchers = account.dispatchers.map((d) => withDispatcherMetrics(createDispatcher(d)));
     subscribeWatcher(watcher, dispatchers);
     observeWatcherMetrics(watcher, account);
   }

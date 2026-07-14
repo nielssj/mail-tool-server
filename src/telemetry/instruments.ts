@@ -87,16 +87,9 @@ export const watcherMailboxMessageCount = meter.createObservableGauge(
 export const dispatcherWebhookDuration = meter.createHistogram(
   'mailtool.dispatcher.webhook.duration',
   {
-    description: 'Duration of a webhook dispatch, including retries, by account/event/outcome.',
+    description:
+      'Duration of a webhook dispatch, including retries, by account/event/outcome. Per-outcome counts are a query over this histogram count, not a separate attempts counter.',
     unit: 's'
-  }
-);
-
-export const dispatcherWebhookAttempts = meter.createCounter(
-  'mailtool.dispatcher.webhook.attempts',
-  {
-    description: 'Count of webhook POST attempts (including retries), by account and outcome.',
-    unit: '{attempt}'
   }
 );
 
