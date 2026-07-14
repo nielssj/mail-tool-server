@@ -14,10 +14,6 @@ export type DispatcherLogger = {
 export type CreateDispatcherOptions = {
   logger?: DispatcherLogger;
   fetch?: typeof globalThis.fetch;
-  /** Called once per individual delivery attempt a dispatcher makes
-   * (before any retry), regardless of the attempt's outcome — not every
-   * dispatcher type will use this, and only WebhookDispatcher does today. */
-  onAttempt?: (outcome: 'ok' | 'error') => void;
 };
 
 export const createDispatcher = (

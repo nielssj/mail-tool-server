@@ -72,10 +72,9 @@ src/
               withMailboxOperationMetrics; calls observeWatcherMetrics for
               each watcher alongside the existing subscribeWatcher wiring;
               wraps each configured Dispatcher with withDispatcherMetrics
-              (passing createAttemptObserver(account.id) as onAttempt) and
-              the BlobStore with withBlobStoreMetrics. mailboxService.ts,
-              webhookDispatcher.ts's retry logic, blobStore.ts, and the
-              real IMAP client all stay fully telemetry-free.
+              and the BlobStore with withBlobStoreMetrics.
+              mailboxService.ts, webhookDispatcher.ts, and the real IMAP
+              client all stay fully telemetry-free.
   imap/watcher.ts   carries three small, non-telemetry additions so
                      watcherMetrics.ts can observe it from the outside: a
                      `reconnecting` event (emitted once per reconnect
@@ -85,20 +84,12 @@ src/
     dispatcherMetrics.ts   withDispatcherMetrics(dispatcher) — decorates a
                       Dispatcher to record mailtool.dispatcher.webhook.duration
                       around handle(); account.id/event come off the
-                      DomainEvent argument, no extra context needed.
-                      createAttemptObserver(accountId) returns an onAttempt
-                      callback (see below) recording
-                      mailtool.dispatcher.webhook.attempts.
+                      DomainEvent argument, no extra context or changes to
+                      webhookDispatcher.ts needed at all.
     blobStoreMetrics.ts   withBlobStoreMetrics(blobStore) — decorates a
                       BlobStore to record mailtool.blobstore.stage.duration/
                       .bytes around stage(), tagged by the caller-supplied
                       `kind`.
-  events/dispatchers/webhookDispatcher.ts   gained one small addition: an
-                      optional `onAttempt` constructor hook (alongside the
-                      existing `logger`/`fetch` options), called once per
-                      individual POST attempt — not observable from
-                      `handle()` alone, since that only reports the final
-                      outcome after retries.
   storage/blobStore.ts   `StageBlobInput` gained a required `kind:
                       'attachment' | 'message'` field, passed through by
                       its two MCP-tool callers — not used by the store
@@ -188,24 +179,30 @@ inside it.
   category of change as Task 2's `id` field.
 
 - **Same pattern again for the dispatcher and blob store — both are
-  single-method interfaces, so both get a pure post-hoc decorator, plus
-  one small addition each for what a decorator genuinely can't see from
-  outside.** `Dispatcher.handle(event)` and `BlobStore.stage(input)` both
-  take everything a decorator needs (`event.accountId`/`event.event`,
+  single-method interfaces, so both get a pure post-hoc decorator.**
+  `Dispatcher.handle(event)` and `BlobStore.stage(input)` both take
+  everything a decorator needs (`event.accountId`/`event.event`,
   `input.kind`) as call arguments already — `withDispatcherMetrics` and
-  `withBlobStoreMetrics` wrap them with no interface changes at all for
-  duration/outcome. Two things weren't visible from outside either
-  interface: individual webhook POST attempts (only the final outcome
-  after retries crosses the `handle()` boundary) and *what* is being
-  staged (the store itself is content-agnostic). For the first,
-  `WebhookDispatcher` gained an optional `onAttempt` constructor hook,
-  alongside its existing `logger`/`fetch` options — the same
-  `CreateDispatcherOptions` bag, one more optional callback, not a new
-  concept. For the second, `StageBlobInput` gained a required `kind`
-  field, populated by its two callers in `mcp/tools/delivery.ts` (which
-  already know whether they're staging an attachment or a full message) —
-  the same move as Task 2's `id` field, generically useful caller-supplied
-  context, not telemetry logic.
+  `withBlobStoreMetrics` wrap them with no interface changes at all.
+  `StageBlobInput` gained a required `kind` field, populated by its two
+  callers in `mcp/tools/delivery.ts` (which already know whether they're
+  staging an attachment or a full message) — the same move as Task 2's
+  `id` field, generically useful caller-supplied context, not telemetry
+  logic. `webhookDispatcher.ts` needed no change at all.
+
+- **Dropped `mailtool.dispatcher.webhook.attempts` — redundant with the
+  duration histogram's own count.** The original plan called for a
+  separate counter of individual webhook POST attempts (including
+  retries), which isn't visible from `handle()` alone (only the final
+  outcome after retries crosses that boundary) — getting it would have
+  meant threading an `onAttempt` callback into `WebhookDispatcher`'s
+  constructor options. Revisited before merging: per-outcome *counts* are
+  already a query over `mailtool.dispatcher.webhook.duration`'s count (the
+  same "prefer one histogram over a counter family" principle applied
+  elsewhere in this doc), and the actual failure mode worth watching for
+  — retries making a dispatch pathologically slow — already shows up
+  directly in that same duration histogram. Not worth the extra
+  constructor-hook plumbing for a number the histogram already implies.
 
 - **No generic HTTP request-rate/latency/error metrics for the plain HTTP
   API in this pass.** No `api/metricsPlugin.ts`, no `http.server.*`
@@ -293,7 +290,6 @@ inside it.
 | `mailtool.watcher.connection_state` | ObservableGauge | 1 (bool) | `account.id` | `telemetry/watcherMetrics.ts` callback, reads `AccountWatcher.isConnected()` |
 | `mailtool.watcher.mailbox.message_count` | ObservableGauge | {message} | `account.id`, `mailbox` | `telemetry/watcherMetrics.ts` callback, reads `AccountWatcher.getMailboxMessageCount(mailbox)` |
 | `mailtool.dispatcher.webhook.duration` | Histogram | s | `account.id`, `event`, `outcome` (`ok`\|`error`) | `telemetry/dispatcherMetrics.ts`'s `withDispatcherMetrics` |
-| `mailtool.dispatcher.webhook.attempts` | Counter | {attempt} | `account.id`, `outcome` | `telemetry/dispatcherMetrics.ts`'s `createAttemptObserver`, via `WebhookDispatcher`'s `onAttempt` hook |
 | `mailtool.blobstore.stage.duration` | Histogram | s | `kind` (`attachment`\|`message`), `outcome` | `telemetry/blobStoreMetrics.ts`'s `withBlobStoreMetrics` |
 | `mailtool.blobstore.stage.bytes` | Histogram | By | `kind` | `telemetry/blobStoreMetrics.ts`'s `withBlobStoreMetrics` |
 
@@ -389,33 +385,29 @@ concurrent watchers.
 **Description:** `telemetry/dispatcherMetrics.ts` exports
 `withDispatcherMetrics(dispatcher)`, decorating any `Dispatcher` to record
 `mailtool.dispatcher.webhook.duration` around `handle()` (`account.id`/
-`event` read straight off the `DomainEvent` argument), and
-`createAttemptObserver(accountId)`, returning an `onAttempt` callback for
-`mailtool.dispatcher.webhook.attempts`. `webhookDispatcher.ts` gained one
-small addition — an optional `onAttempt` constructor hook (added to the
-existing `CreateDispatcherOptions` bag alongside `logger`/`fetch`), called
-once per individual POST attempt — since individual attempts aren't visible
-from `handle()` alone. `telemetry/blobStoreMetrics.ts` exports
-`withBlobStoreMetrics(blobStore)`, decorating any `BlobStore` to record
-`mailtool.blobstore.stage.duration`/`.bytes` around `stage()`, tagged by
-`kind`. `storage/blobStore.ts`'s `StageBlobInput` gained a required `kind:
-'attachment' | 'message'` field, populated by its two callers in
-`mcp/tools/delivery.ts`. `server.ts` wires both: each configured
-`Dispatcher` is wrapped with `withDispatcherMetrics` (passing
-`createAttemptObserver(account.id)` as `onAttempt`), and the `BlobStore` is
-wrapped with `withBlobStoreMetrics`.
-**Acceptance criteria:** Three new tests added directly to
-`webhookDispatcher.test.ts` for the `onAttempt` hook itself (independent of
-telemetry): called once with `"ok"` on first-try success, `"error"` then
-`"ok"` on retry-then-success, `"error"` for every attempt when retries are
-exhausted. New `dispatcherMetrics.test.ts` asserts duration/outcome recorded
-correctly on success and failure (against a stub `Dispatcher`), and that
-`createAttemptObserver` records attempts tagged with the bound account id.
-New `blobStoreMetrics.test.ts` (against a stub `BlobStore`) asserts
-duration/byte-size recorded correctly for both an attachment and a
+`event` read straight off the `DomainEvent` argument — no interface changes,
+no changes to `webhookDispatcher.ts` at all). `telemetry/blobStoreMetrics.ts`
+exports `withBlobStoreMetrics(blobStore)`, decorating any `BlobStore` to
+record `mailtool.blobstore.stage.duration`/`.bytes` around `stage()`, tagged
+by `kind`. `storage/blobStore.ts`'s `StageBlobInput` gained a required
+`kind: 'attachment' | 'message'` field, populated by its two callers in
+`mcp/tools/delivery.ts`. `server.ts` wires both: each configured `Dispatcher`
+is wrapped with `withDispatcherMetrics`, and the `BlobStore` is wrapped with
+`withBlobStoreMetrics`. The originally-planned
+`mailtool.dispatcher.webhook.attempts` counter (and the `onAttempt`
+constructor hook it would have needed on `WebhookDispatcher`) was dropped
+before merging — see the "Dropped `mailtool.dispatcher.webhook.attempts`"
+design decision above.
+**Acceptance criteria:** New `dispatcherMetrics.test.ts` asserts duration/
+outcome recorded correctly on success and failure, against a stub
+`Dispatcher`. New `blobStoreMetrics.test.ts` (against a stub `BlobStore`)
+asserts duration/byte-size recorded correctly for both an attachment and a
 full-message stage call, and that bytes are only recorded on success.
 Existing `blobStore.test.ts`/`mcpDeliveryTools.test.ts` updated for the new
 required `kind` field; both pass otherwise unmodified.
+`webhookDispatcher.test.ts`/`events/dispatcher.ts` pass unmodified —
+confirmed via `git diff origin/main -- src/events/dispatchers/webhookDispatcher.ts
+src/events/dispatcher.ts` showing no diff.
 
 #### Task 5 — MCP tool + transport metrics
 **Description:** Extend (or add a sibling to) `mcp/errors.ts`'s

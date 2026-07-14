@@ -11,13 +11,10 @@ export class WebhookDispatcher implements Dispatcher {
 
   private readonly logger?: DispatcherLogger;
 
-  private readonly onAttempt?: (outcome: 'ok' | 'error') => void;
-
   constructor(config: WebhookDispatcherConfig, options: CreateDispatcherOptions = {}) {
     this.url = config.url;
     this.fetchFn = options.fetch ?? globalThis.fetch;
     this.logger = options.logger;
-    this.onAttempt = options.onAttempt;
   }
 
   async handle(event: DomainEvent): Promise<void> {
@@ -35,9 +32,7 @@ export class WebhookDispatcher implements Dispatcher {
       if (!response.ok) {
         throw new Error(`Webhook returned HTTP ${response.status}`);
       }
-      this.onAttempt?.('ok');
     } catch (error) {
-      this.onAttempt?.('error');
       if (attemptsLeft > 1) {
         await this.postWithRetry(event, attemptsLeft - 1);
         return;
