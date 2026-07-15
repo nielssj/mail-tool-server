@@ -2,12 +2,12 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from './server.js';
 import type { MailboxService } from '../services/mailboxService.js';
-import type { AccountConfig } from '../utils/config/schema.js';
+import type { AccountService } from '../services/accountService.js';
 import type { BlobStore } from '../storage/blobStore.js';
 
 export type CreateMcpHttpServerOptions = {
   mailboxService: MailboxService;
-  accounts: AccountConfig[];
+  accountService: AccountService;
   blobStore?: BlobStore;
 };
 

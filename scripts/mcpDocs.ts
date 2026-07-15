@@ -4,6 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
+import type { AccountService } from '../src/services/accountService.js';
 
 /**
  * Generates the "Tools" section of docs/mcp-tools.md directly from the
@@ -128,12 +129,19 @@ const makeStubMailboxService = (): MailboxService => ({
   setFlags: async () => undefined
 });
 
+const makeStubAccountService = (): AccountService => ({
+  listAccounts: async () => []
+});
+
 /** Fetches the live tool list (names, descriptions, schemas, annotations)
  * by connecting a real client to a real (stub-backed) server over the
  * SDK's in-memory transport — the same tool metadata a real MCP client
  * would see, with no IMAP/network/config required. */
 export const fetchToolList = async (): Promise<ToolLike[]> => {
-  const server = createMcpServer({ mailboxService: makeStubMailboxService(), accounts: [] });
+  const server = createMcpServer({
+    mailboxService: makeStubMailboxService(),
+    accountService: makeStubAccountService()
+  });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'mcp-docs-generator', version: '0.0.0' });
 

@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 
 const ACCOUNTS: AccountConfig[] = [
@@ -38,7 +39,7 @@ describe('createMcpServer', () => {
   it('responds to initialize and lists the registered tools over the in-memory transport', async () => {
     const server = createMcpServer({
       mailboxService: makeMailboxService(),
-      accounts: ACCOUNTS
+      accountService: createAccountService(ACCOUNTS)
     });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

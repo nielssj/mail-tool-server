@@ -21,11 +21,6 @@ export const mcpRequestDuration = meter.createHistogram('mailtool.mcp.request.du
   unit: 's'
 });
 
-export const mcpToolDuration = meter.createHistogram('mailtool.mcp.tool.duration', {
-  description: 'Duration of a single MCP tool call, by tool name and outcome.',
-  unit: 's'
-});
-
 export const imapConnectionDuration = meter.createHistogram(
   'mailtool.imap.connection.duration',
   {
@@ -41,6 +36,14 @@ export const imapConnectionErrors = meter.createCounter('mailtool.imap.connectio
 });
 
 // ---- Domain-specific ----
+
+export const accountOperationDuration = meter.createHistogram(
+  'mailtool.account.operation.duration',
+  {
+    description: 'Duration of an accountService operation, by operation and outcome.',
+    unit: 's'
+  }
+);
 
 export const mailboxOperationDuration = meter.createHistogram(
   'mailtool.mailbox.operation.duration',

@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import type { MailboxService } from '../src/services/mailboxService.js';
+import { createAccountService } from '../src/services/accountService.js';
 import type { AccountConfig } from '../src/utils/config/schema.js';
 import type { ListResponse } from 'imapflow';
 
@@ -35,7 +36,7 @@ describe('account discovery tools', () => {
   let client: Client | undefined;
 
   const connect = async (mailboxService: MailboxService): Promise<Client> => {
-    const server = createMcpServer({ mailboxService, accounts: ACCOUNTS });
+    const server = createMcpServer({ mailboxService, accountService: createAccountService(ACCOUNTS) });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test-client', version: '0.0.0' });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
