@@ -233,6 +233,20 @@ perspective a move is indistinguishable from a deletion, so a move emits a
 the message landed. True cross-folder move tracking is out of scope; treat
 `mailRemoved` as "gone from this mailbox," not necessarily "deleted."
 
+## Metrics
+
+The server instruments itself with [OpenTelemetry](https://opentelemetry.io/)
+metrics — mailbox/account operation duration, IMAP connection health,
+watcher domain events, webhook dispatch outcomes, blob-storage staging, and
+MCP transport health. See **[docs/metrics.md](docs/metrics.md)** for the
+full reference (every metric's name, type, unit, attributes, and
+description).
+
+Metrics are emitted via `@opentelemetry/api` only — there's no bundled SDK,
+exporter, or collection configuration. Every instrument is a safe no-op
+until something registers a global `MeterProvider` for the process (see
+`docs/metrics.md` for how); nothing here is required to run the server.
+
 ## Testing
 
 Unit tests mock IMAP at the module boundary and run with no Docker or network:
@@ -257,14 +271,20 @@ src/
   utils/config/   JSON config loading + zod schema validation
   utils/logger.ts createLogger(config) factory (pino)
   imap/           clientFactory (short-lived connections) + watcher (IDLE)
-  services/       mailboxService — core IMAP operations, shared by HTTP + MCP
+  services/       mailboxService (core IMAP operations) + accountService
+                  (account listing) — both shared by HTTP + MCP
   storage/        blobStore — stages large payloads into S3-compatible storage
   events/         domain event types, dispatcher framework + webhook dispatcher
   api/            Fastify routes + swagger plugin + error handler
   mcp/            MCP server: tool registration (tools/), errors.ts, format.ts,
                   server.ts (transport-agnostic), httpServer.ts (Streamable HTTP)
+  telemetry/      OpenTelemetry metrics — instruments.ts (every instrument,
+                  created once) plus one decorator per instrumented
+                  component, applied at server.ts's composition root. See
+                  docs/metrics.md.
   app.ts          builds the Fastify instance (no listen)
   server.ts       entrypoint: config → watchers/services → HTTP API + MCP server
 test/             unit tests (test/integration/ = container-backed suite)
 docs/             docs/mcp-tools.md — full MCP tool reference
+                  docs/metrics.md — full OTel metrics reference
 ```

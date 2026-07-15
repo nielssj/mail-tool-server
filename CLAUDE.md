@@ -1,6 +1,6 @@
 # Working conventions for this repo
 
-## Task workflow (e.g. docs/mcp-tool-interface-proposal.md)
+## Task workflow (e.g. docs/proposal/mcp-tool-interface-proposal.md)
 
 - Each task in a proposal doc's "Task Breakdown" is implemented on its own
   feature branch and shipped as its own PR.

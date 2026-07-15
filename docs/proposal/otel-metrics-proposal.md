@@ -528,6 +528,7 @@ is empty; `mcp/httpServer.ts`/`mcp/server.ts` only have their options
 AccountService`), no logic touched in either file.
 
 #### Task 6 — Docs
+**Status:** DONE
 **Description:** New `docs/metrics.md`: the full metrics catalog (name,
 type, unit, attributes, description, source) as the authoritative reference
 for whoever configures collection — effectively the "what you can scrape"

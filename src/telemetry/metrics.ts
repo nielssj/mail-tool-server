@@ -6,7 +6,7 @@ import { metrics, type Meter } from '@opentelemetry/api';
  * meter through here, never calls the OTel API directly. Safe to call and
  * record against with no MeterProvider registered — @opentelemetry/api
  * returns a no-op Meter in that case, so instrumentation never throws
- * before a collection platform is wired up (see docs/otel-metrics-proposal.md).
+ * before a collection platform is wired up (see docs/proposal/otel-metrics-proposal.md).
  */
 export const getMeter = (name: string, version?: string): Meter =>
   metrics.getMeter(name, version);
