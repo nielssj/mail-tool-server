@@ -49,7 +49,7 @@ const instrumentOperation = <F extends MailboxOperation>(
     // "unknown" rather than echoed as-is, since HTTP/MCP callers can pass
     // arbitrary strings and unbounded attribute values would blow up
     // cardinality in whatever backend collects these metrics (see
-    // docs/otel-metrics-proposal.md).
+    // docs/proposal/otel-metrics-proposal.md).
     const accountLabel = knownAccountIds.has(accountId) ? accountId : 'unknown';
 
     try {

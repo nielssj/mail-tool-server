@@ -1,6 +1,6 @@
-Implement the next task (first from the top not Status = DONE) within docs/high-level-solution-proposal.md.
+Implement the next task (first from the top not Status = DONE) within docs/proposal/high-level-solution-proposal.md.
 
-As part of the same solution PR, update docs/high-level-solution-proposal.md to mark the task you completed as Status = DONE before you stop.
+As part of the same solution PR, update docs/proposal/high-level-solution-proposal.md to mark the task you completed as Status = DONE before you stop.
 
 Commit and push, confirm CI checks pass. Run checks locally before you commit and push, if you can.
 

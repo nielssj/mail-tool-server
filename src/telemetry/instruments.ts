@@ -5,7 +5,7 @@ import { getMeter } from './metrics.js';
  * Every OTel instrument the server records against, created once and
  * exported by name — call sites import the instrument they need and never
  * call meter.createXxx() inline. Keeps naming/units/descriptions from
- * drifting across call sites (see docs/otel-metrics-proposal.md).
+ * drifting across call sites (see docs/proposal/otel-metrics-proposal.md).
  *
  * Duration and byte-size histograms below use OTel SDK default bucket
  * boundaries for v1 (no explicit `advice.explicitBucketBoundaries`) —

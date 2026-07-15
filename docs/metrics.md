@@ -13,8 +13,8 @@ The server only calls into `@opentelemetry/api` — there is no
 bundled into `src/`. Every instrument below is a safe no-op until
 *something* registers a global `MeterProvider` for this process, which is a
 separate, deploy-time concern this repo deliberately doesn't own (see
-[`docs/otel-metrics-proposal.md`](otel-metrics-proposal.md) for the full
-reasoning).
+[`docs/proposal/otel-metrics-proposal.md`](proposal/otel-metrics-proposal.md)
+for the full reasoning).
 
 To actually collect these metrics, register an SDK `MeterProvider` +
 exporter **before** any application code loads — e.g. via a `--require`/
@@ -59,7 +59,7 @@ env var) — this server never hardcodes them.
   per-outcome counts from its count, no separate counter is also provided.
 - `mailtool.mailbox.operation.duration` is recorded for both HTTP- and
   MCP-triggered calls with no attribute distinguishing which — see
-  `docs/otel-metrics-proposal.md` for why.
+  `docs/proposal/otel-metrics-proposal.md` for why.
 
 ## Generic / operational metrics
 
