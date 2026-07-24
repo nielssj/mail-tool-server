@@ -74,11 +74,14 @@ already lines up, and adds exactly **one** new label:
     release.yaml               New workflow. Trigger: `push` to `main`
                                (i.e. every merge). Three sequential jobs,
                                described below.
-Dockerfile                     Multi-stage: `builder` (node:lts-alpine,
+Dockerfile                     Multi-stage: `builder` (node:24-alpine,
                                `npm ci`, `npm run build`) -> runtime
-                               (node:lts-alpine, `npm ci --omit=dev`,
+                               (node:24-alpine, `npm ci --omit=dev`,
                                copies `dist/` from builder, runs as the
                                image's existing non-root `node` user).
+                               Node version pinned to the current Active
+                               LTS major via a single `ARG NODE_VERSION`,
+                               not the floating `lts` tag — see Task 1.
                                `EXPOSE 3000 3001` (matching `PORT`/
                                `MCP_PORT` defaults in `src/server.ts`).
                                `CMD ["node", "dist/server.js"]`. No
@@ -181,11 +184,24 @@ await approval).
 #### Task 1 — Dockerfile
 **Status:** DONE
 **Description:** Added a multi-stage `Dockerfile` (`builder` stage:
-`node:lts-alpine`, `npm ci`, `COPY . .`, `npm run build`; `runtime` stage:
-`node:lts-alpine`, `npm ci --omit=dev`, non-root `node` user, `EXPOSE 3000
+`node:24-alpine`, `npm ci`, `COPY . .`, `npm run build`; `runtime` stage:
+`node:24-alpine`, `npm ci --omit=dev`, non-root `node` user, `EXPOSE 3000
 3001`, `CMD ["node", "dist/server.js"]`) and a `.dockerignore`
 (`node_modules`, `dist`, `.git`, `.github`, `config.json`/`config.*.json`,
 `docs`, `README.md`, etc.).
+
+**Revised after initial review — pinned Node version, not floating `lts`.**
+The first pass used `node:lts-alpine`, which silently tracks whatever
+Node.js currently calls "LTS" — meaning the image's Node major could jump
+(e.g. 24 -> 26) with no corresponding change in this repo to review, the
+exact risk flagged in review. Switched to `ARG NODE_VERSION=24-alpine`
+(declared once, referenced by both stages), pinned to the current Active
+LTS major confirmed via a web search at the time of this change (Node 24 is
+Active LTS; Node 22 is Maintenance LTS; Node 26 is `Current`, not LTS until
+October 2026 — sources in the PR). Moving to a new major now requires
+editing that one `ARG` line, which goes through this repo's normal PR
+review — "validate whenever we bump" happens for free via that review, no
+extra tooling needed for that alone.
 
 **Deviation found during implementation:** `tsconfig.json`'s `rootDir: "."`
 plus its `include` (`src/**`, `test/**`, `scripts/**`) means `npm run build`

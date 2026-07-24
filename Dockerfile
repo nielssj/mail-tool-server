@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1
 
-FROM node:lts-alpine AS builder
+# Pinned to the current Active LTS major (not the floating `lts` tag) so a
+# new Node major never lands in this image without a deliberate, reviewed
+# Dockerfile change. Bumping this is the only step needed to move majors —
+# both stages reference it from here.
+ARG NODE_VERSION=24-alpine
+
+FROM node:${NODE_VERSION} AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -9,7 +15,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:lts-alpine AS runtime
+FROM node:${NODE_VERSION} AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
