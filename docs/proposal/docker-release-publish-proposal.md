@@ -471,7 +471,62 @@ dedicated verification pass rather than being bundled into an urgent fix.
 end to end (all three jobs, including a real `draft-release` diffing
 against an existing prior release) — verified live, not simulated, since
 this exact failure mode was invisible to every prior local/CI verification
-method used in this proposal.
+method used in this proposal. **Confirmed**: this fix's own PR (#35,
+labeled `bug`) merging to `main` produced a real, correct run — all three
+jobs succeeded,
+[v0.0.2](https://github.com/nielssj/mail-tool-server/releases/tag/v0.0.2)
+published (patch bump, as expected from a `bug` label), `ghcr.io/nielssj/
+mail-tool-server:v0.0.2` and `:latest` pushed with real digests, and — for
+the first time in production — the changelog correctly split PR #34
+(unlabeled) into the uncategorized "What's Changed" bucket and PR #35
+(`bug`) into the "🐛 Bug Fixes" section, confirming categorization works
+live, not just in Task 2's mismatched-version local harness.
+
+#### Task 6 — Migrate `release-drafter.yml` off deprecated fields
+**Status:** DONE
+**Description:** Migrated `.github/release-drafter.yml` from the legacy
+`categories[*].label(s)` / top-level `version-resolver.{major,minor}.labels`
+schema (deprecated in v7, warned on every run since Task 5) to the current
+unified schema: each category now carries its own `when: { label: ... }`
+(or `labels: [...]` for Maintenance) and `semver-increment` (`major`/
+`minor`; omitted elsewhere, defaulting to `patch`). The separate top-level
+`version-resolver` block is gone entirely — no longer needed. No explicit
+catch-all/fallback category was added for "unlabeled -> patch" either: read
+`resolveVersionKeyIncrement`'s real source directly and confirmed it
+already defaults the version-resolver-type contribution to `patch` (`??
+priorityMap.patch`) whenever no `type: "version-resolver"` category exists
+or matches — the framework's own built-in default already does exactly
+what the old `version-resolver.default: patch` used to do explicitly.
+
+**Verification, learning from Task 2's mistake this time:** rather than
+`npm install` a same-named package and hope it matches, cloned
+`release-drafter/release-drafter` at the *exact* deployed commit
+(`eada3c96a64734dd381cfbda23511034e328ddb0`, the same SHA pinned in
+`release.yaml`), installed its own dependencies, and drove its real
+`resolveVersionKeyIncrement`/`generateChangeLog` functions — through the
+real `mergeInputAndConfig` pipeline (config schema parse -> deprecated-field
+migration/`when`-array normalization -> merge with input), not a shortcut
+around it, since an earlier attempt that skipped straight to the raw Zod
+`configSchema.parse()` output crashed (`category.when.some is not a
+function`) because `when` normalization from a single object to an array
+only happens in `parseCategories()`, a separate step `mergeInputAndConfig`
+calls internally. (v7's codebase requires Node 24 / real TS `enum` support
+that this sandbox's Node 22 can't strip — routed around it by running the
+test through the repo's own already-configured `vitest`, which handles
+that via esbuild, rather than plain `node`.) 8 test cases against the real
+source, all passing: config parses with `when` correctly normalized to
+arrays; `breaking-change` wins major even alongside other labels;
+`enhancement` alone resolves to minor; `bug` alone and a completely
+unlabeled PR both resolve to patch; a Maintenance-only label resolves to
+patch; the changelog renders all 5 category headings plus the unlabeled PR
+in the uncategorized bucket exactly as designed; and — spying on
+`core.warning` — the migrated config produces **zero** deprecation
+warnings, versus the 7 the old config produced on every real run.
+**Acceptance criteria:** No deprecation warnings on the next real
+`release.yaml` run, and version resolution / categorization behave
+identically to the pre-migration config for every label combination in the
+design table. Confirmed locally against the exact deployed source per
+above; full live confirmation happens on the next real merge to `main`.
 
 ---
 
