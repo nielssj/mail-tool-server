@@ -3,46 +3,35 @@ tag-template: 'v$RESOLVED_VERSION'
 
 categories:
   - title: '💥 Breaking Changes'
-    labels:
-      - 'breaking-change'
+    semver-increment: major
+    when:
+      label: 'breaking-change'
   - title: '🚀 Features'
-    labels:
-      - 'enhancement'
+    semver-increment: minor
+    when:
+      label: 'enhancement'
   - title: '🐛 Bug Fixes'
-    labels:
-      - 'bug'
+    when:
+      label: 'bug'
   - title: '📝 Documentation'
-    labels:
-      - 'documentation'
+    when:
+      label: 'documentation'
   # Catches every other default GitHub label. A PR with none of the labels
-  # above at all still gets included in $CHANGES, just without a category
-  # heading — release-drafter has no true wildcard/catch-all category match.
+  # in this file at all still gets included in $CHANGES, just without a
+  # category heading (release-drafter has no true wildcard/catch-all
+  # changelog category) — it still gets at least a patch version bump,
+  # since the resolver defaults to patch when nothing more severe matched.
   - title: '🧰 Maintenance'
-    labels:
-      - 'duplicate'
-      - 'good first issue'
-      - 'help wanted'
-      - 'invalid'
-      - 'question'
-      - 'wontfix'
+    when:
+      labels:
+        - 'duplicate'
+        - 'good first issue'
+        - 'help wanted'
+        - 'invalid'
+        - 'question'
+        - 'wontfix'
 
 change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
-
-# Only major/minor need explicit labels: `default: patch` already covers
-# every PR that isn't major or minor, including bug/documentation/unlabeled/
-# anything else, so listing them again here would be redundant. Confirmed
-# against release-drafter's actual source (not just its docs) that omitting
-# the `patch:` key entirely is safe — release-drafter-github-app's
-# validateSchema deep-merges the user config onto its own DEFAULT_CONFIG
-# before validating, which back-fills `patch: { labels: [] }`.
-version-resolver:
-  major:
-    labels:
-      - 'breaking-change'
-  minor:
-    labels:
-      - 'enhancement'
-  default: patch
 
 template: |
   ## What's Changed
