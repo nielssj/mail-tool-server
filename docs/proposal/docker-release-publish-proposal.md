@@ -335,6 +335,22 @@ release-drafter@v7` (confirmed output `tag_name` still exists, and a new
 `token` input defaults to `github.token` so nothing extra needs passing),
 `docker/login-action@v4`, `docker/build-push-action@v7`.
 
+**Revised after review — `release-drafter` pinned to a commit SHA, not the
+`v7` tag.** Third-party (non-GitHub-authored) actions are a supply-chain
+risk if the tag is ever moved — a compromised maintainer account could push
+malicious code to `v7` and every consumer would pick it up silently on the
+next run. `release-drafter/release-drafter` is community-maintained (not a
+GitHub- or Docker-authored action), so both its `uses:` lines now pin the
+exact commit SHA `v7` resolved to at the time of this change
+(`eada3c96a64734dd381cfbda23511034e328ddb0`, confirmed via `git ls-remote`
+— dereferencing the annotated tag, not the tag object's own SHA — and
+cross-checked against the GitHub API commit endpoint), with a trailing
+`# v7.6.0` comment recording which release that corresponds to for future
+bumps. `actions/checkout` (GitHub-authored) and `docker/login-action`/
+`docker/build-push-action` (Docker, Inc.-authored, same trust tier judgment
+call) were kept on major-version tags per explicit direction — SHA-pinning
+scope limited to `release-drafter` for this PR.
+
 **No manual `v0.1.0` bootstrap needed — revised after Task 2.** The
 original plan here was a one-time manual release + image push to seed a
 `v0.1.0` baseline, on the assumption that `release-drafter`'s
@@ -358,13 +374,15 @@ file), not something to assume. Added a temporary `pull_request`-triggered
 scratch workflow that logged into GHCR and ran a real
 `docker/build-push-action` push to a throwaway `:scratch-test` tag. It
 succeeded — real digest returned, no errors — confirming the token/
-permissions setup works. Removed the scratch workflow afterward. **Leftover
-cleanup needed:** the `:scratch-test` package version itself is still
-sitting in GHCR — this session's token has no `packages:read`/
-`packages:delete` scope to remove it via API, so it needs deleting by hand
-(GitHub UI, or grant that scope) — harmless in the meantime, since
-`release.yaml` only ever pushes `:latest`/`:vX.Y.Z` tags, never
-`:scratch-test`.
+permissions setup works. Removed the scratch workflow afterward. Leftover
+`:scratch-test` package cleaned up afterward (by hand, via `gh api -X
+DELETE /users/nielssj/packages/container/mail-tool-server` — fine-grained
+PATs don't support Packages/Container Registry operations at all per
+GitHub's own docs, so this needed a classic-PAT-scoped `read:packages`/
+`delete:packages` token instead; it was also the package's only version, so
+GitHub required deleting the whole package rather than just that one
+version). The package will be recreated fresh, correctly, on the first real
+`release.yaml` run.
 **Acceptance criteria:** A real merge to `main` results in: a new image
 visible at `ghcr.io/nielssj/mail-tool-server` tagged both `latest` and
 `v0.1.0` (the very first run) or the correctly resolved next version

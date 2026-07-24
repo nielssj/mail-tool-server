@@ -19,7 +19,7 @@ jobs:
     steps:
       - name: Draft release
         id: draft
-        uses: release-drafter/release-drafter@v7
+        uses: release-drafter/release-drafter@eada3c96a64734dd381cfbda23511034e328ddb0 # v7.6.0
         with:
           publish: false
 
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
-        uses: release-drafter/release-drafter@v7
+        uses: release-drafter/release-drafter@eada3c96a64734dd381cfbda23511034e328ddb0 # v7.6.0
         with:
           publish: true
           tag: ${{ needs.draft-release.outputs.tag_name }}
