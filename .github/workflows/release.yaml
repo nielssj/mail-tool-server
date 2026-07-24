@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # Drafts (does not publish) the next release from .github/release-drafter.yml
+  # purely to resolve what version this run is building — outputs the
+  # resolved tag so both later jobs use the same value.
+  draft-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.draft.outputs.tag_name }}
+    steps:
+      - name: Draft release
+        id: draft
+        uses: release-drafter/release-drafter@eada3c96a64734dd381cfbda23511034e328ddb0 # v7.6.0
+        with:
+          publish: false
+
+  build-and-push:
+    needs: draft-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ needs.draft-release.outputs.tag_name }}
+            ghcr.io/${{ github.repository }}:latest
+
+  # Only runs once build-and-push has succeeded, so a published release
+  # always has a matching image already in GHCR. Pins tag/name to
+  # draft-release's already-resolved values (rather than letting
+  # release-drafter recompute independently here) so this can never publish
+  # a different version than the one build-and-push just tagged and pushed
+  # — closes what would otherwise be a small race window if another PR
+  # merged to main between the draft-release and publish-release jobs.
+  publish-release:
+    needs: [draft-release, build-and-push]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        uses: release-drafter/release-drafter@eada3c96a64734dd381cfbda23511034e328ddb0 # v7.6.0
+        with:
+          publish: true
+          tag: ${{ needs.draft-release.outputs.tag_name }}
+          name: ${{ needs.draft-release.outputs.tag_name }}
