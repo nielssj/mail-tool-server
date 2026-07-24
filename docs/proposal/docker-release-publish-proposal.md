@@ -14,8 +14,11 @@ the version and changelog that image corresponds to.
 - Deploying the image anywhere. This proposal only builds and publishes it.
 - Multi-arch images (`linux/amd64` only for v1) — noted as a possible
   follow-up.
-- Changes to the existing `ci.yaml` PR-check workflow — this is a new,
-  separate workflow, triggered differently (`push` to `main`, not `pull_request`).
+- Broad changes to the existing `ci.yaml` PR-check workflow — the
+  release/publish pipeline itself is a new, separate workflow, triggered
+  differently (`push` to `main`, not `pull_request`). (One small, explicitly
+  requested addition to `ci.yaml` — a `docker-build` smoke-test job — is in
+  scope; see Task 1.)
 - Bumping `package.json`'s `version` field — see design decision below.
 
 ### Stack additions
@@ -71,11 +74,14 @@ already lines up, and adds exactly **one** new label:
     release.yaml               New workflow. Trigger: `push` to `main`
                                (i.e. every merge). Three sequential jobs,
                                described below.
-Dockerfile                     Multi-stage: `builder` (node:lts-alpine,
+Dockerfile                     Multi-stage: `builder` (node:24-alpine,
                                `npm ci`, `npm run build`) -> runtime
-                               (node:lts-alpine, `npm ci --omit=dev`,
+                               (node:24-alpine, `npm ci --omit=dev`,
                                copies `dist/` from builder, runs as the
                                image's existing non-root `node` user).
+                               Node version pinned to the current Active
+                               LTS major via a single `ARG NODE_VERSION`,
+                               not the floating `lts` tag — see Task 1.
                                `EXPOSE 3000 3001` (matching `PORT`/
                                `MCP_PORT` defaults in `src/server.ts`).
                                `CMD ["node", "dist/server.js"]`. No
@@ -176,20 +182,80 @@ with the existing workflow (implement, mark `Status: DONE` here, open PR,
 await approval).
 
 #### Task 1 — Dockerfile
-**Status:** TODO
-**Description:** Add a multi-stage `Dockerfile` (`builder` stage: `node:lts-
-alpine`, `npm ci`, `npm run build`; runtime stage: `node:lts-alpine`, `npm ci
---omit=dev`, copy `dist/` from the builder, non-root `node` user, `EXPOSE
-3000 3001`, `CMD ["node", "dist/server.js"]`) and a `.dockerignore`
-(`node_modules`, `.git`, `test/`, `docs/`, `config.json`, `*.log`, coverage
-output if any).
+**Status:** DONE
+**Description:** Added a multi-stage `Dockerfile` (`builder` stage:
+`node:24-alpine`, `npm ci`, `COPY . .`, `npm run build`; `runtime` stage:
+`node:24-alpine`, `npm ci --omit=dev`, non-root `node` user, `EXPOSE 3000
+3001`, `CMD ["node", "dist/server.js"]`) and a `.dockerignore`
+(`node_modules`, `dist`, `.git`, `.github`, `config.json`/`config.*.json`,
+`docs`, `README.md`, etc.).
+
+**Revised after initial review — pinned Node version, not floating `lts`.**
+The first pass used `node:lts-alpine`, which silently tracks whatever
+Node.js currently calls "LTS" — meaning the image's Node major could jump
+(e.g. 24 -> 26) with no corresponding change in this repo to review, the
+exact risk flagged in review. Switched to `ARG NODE_VERSION=24-alpine`
+(declared once, referenced by both stages), pinned to the current Active
+LTS major confirmed via a web search at the time of this change (Node 24 is
+Active LTS; Node 22 is Maintenance LTS; Node 26 is `Current`, not LTS until
+October 2026 — sources in the PR). Moving to a new major now requires
+editing that one `ARG` line, which goes through this repo's normal PR
+review — "validate whenever we bump" happens for free via that review, no
+extra tooling needed for that alone.
+
+**Deviation found during implementation:** `tsconfig.json`'s `rootDir: "."`
+plus its `include` (`src/**`, `test/**`, `scripts/**`) means `npm run build`
+actually emits to `dist/src/server.js`, not `dist/server.js` —
+`package.json`'s existing `main`/`start` (`node dist/server.js`) has
+apparently been broken pre-existing, unrelated to this proposal, likely
+never exercised since local dev always runs `npm run dev` (`tsx
+src/server.ts`) instead. Rather than fix that repo-wide (out of scope here,
+and it's not obviously safe to change `tsconfig.json`'s `include`/`rootDir`
+without also affecting what CI's `Build` step type-checks), the runtime
+stage copies just `dist/src` back to `./dist`
+(`COPY --from=builder /app/dist/src ./dist`), which both restores the
+expected `dist/server.js` path and drops the compiled `test`/`scripts`
+output the image has no use for. This is safe because the only two modules
+that import anything outside `src/` (`mcp/server.ts` and
+`telemetry/instruments.ts`, both `import packageJson from
+'../../package.json'`) resolve that relative path against the runtime
+stage's own `/app/package.json` (copied in for `npm ci --omit=dev`
+regardless) once flattened — verified by simulating both stages'
+file layout by hand (no nested-Docker daemon available in this sandbox to
+run a literal `docker build`) and booting the result with `{"accounts":
+[]}`, confirming `GET /health` returns `{"status":"ok"}` and the MCP port
+responds correctly. Documented as a code comment directly in the
+Dockerfile. Left `package.json`'s `main`/`start` fields as-is since fixing
+them is unrelated to this proposal — flagged separately for a possible
+follow-up outside this task.
+**Follow-up, same task/PR — `docker-build` CI job:** this sandbox has no
+working Docker daemon (confirmed: installing `docker.io` and starting
+`dockerd` fails here with `failed to mount overlay: operation not
+permitted` / an `iptables` permission error — no privileged
+overlay/netfilter access), so a literal `docker build`/`docker run` could
+only be simulated by hand, not actually executed, in this session. Since
+GitHub-hosted runners *do* have a working Docker daemon, added a new
+`docker-build` job to the existing `.github/workflows/ci.yaml` (out of this
+proposal's original scope, but small and directly needed to actually verify
+the Dockerfile — added with explicit go-ahead) that runs on every PR:
+`docker build`s the image, starts a container with a minimal `{"accounts":
+[]}` config mounted, polls `GET /health` for up to 20s, checks `GET /mcp`
+returns `405`, then always prints container logs and tears the container
+down. This becomes the permanent, real verification of the Dockerfile going
+forward (not just for this task) — every future PR that changes the
+Dockerfile, `package.json`, or app source gets a real `docker build` +
+boot-and-serve check before merge. Whether it's a *required* status check
+is a branch-protection setting, not something this workflow file controls —
+left for the user to configure if wanted.
 **Acceptance criteria:** `docker build -t mail-tool-server:local .` succeeds
 locally. Running it with a mounted `config.json` (copied from
 `config.example.json`, pointed at a throwaway/dummy IMAP account so startup
 doesn't hang trying to actually connect — or with watch accounts left empty
 if the schema allows it) via `-v $(pwd)/config.json:/app/config.json -e
 CONFIG_PATH=/app/config.json -p 3000:3000 -p 3001:3001` boots and
-`curl localhost:3000/health` returns `{"status":"ok"}`.
+`curl localhost:3000/health` returns `{"status":"ok"}`. Confirmed via the
+new `docker-build` CI job on this task's own PR (see below) rather than
+locally, since this sandbox can't run Docker at all.
 
 #### Task 2 — release-drafter config
 **Status:** TODO

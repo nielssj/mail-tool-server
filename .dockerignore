@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+.github
+.env
+.DS_Store
+coverage
+*.log
+
+# Real config may hold credentials; never let it leak into a build context.
+# The compiled server always reads its config from an externally mounted
+# file at runtime (CONFIG_PATH), never from anything baked into the image.
+config.json
+config.*.json
+
+docs
+README.md
