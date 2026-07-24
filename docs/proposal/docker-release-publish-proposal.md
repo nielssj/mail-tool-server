@@ -176,20 +176,52 @@ with the existing workflow (implement, mark `Status: DONE` here, open PR,
 await approval).
 
 #### Task 1 — Dockerfile
-**Status:** TODO
-**Description:** Add a multi-stage `Dockerfile` (`builder` stage: `node:lts-
-alpine`, `npm ci`, `npm run build`; runtime stage: `node:lts-alpine`, `npm ci
---omit=dev`, copy `dist/` from the builder, non-root `node` user, `EXPOSE
-3000 3001`, `CMD ["node", "dist/server.js"]`) and a `.dockerignore`
-(`node_modules`, `.git`, `test/`, `docs/`, `config.json`, `*.log`, coverage
-output if any).
+**Status:** DONE
+**Description:** Added a multi-stage `Dockerfile` (`builder` stage:
+`node:lts-alpine`, `npm ci`, `COPY . .`, `npm run build`; `runtime` stage:
+`node:lts-alpine`, `npm ci --omit=dev`, non-root `node` user, `EXPOSE 3000
+3001`, `CMD ["node", "dist/server.js"]`) and a `.dockerignore`
+(`node_modules`, `dist`, `.git`, `.github`, `config.json`/`config.*.json`,
+`docs`, `README.md`, etc.).
+
+**Deviation found during implementation:** `tsconfig.json`'s `rootDir: "."`
+plus its `include` (`src/**`, `test/**`, `scripts/**`) means `npm run build`
+actually emits to `dist/src/server.js`, not `dist/server.js` —
+`package.json`'s existing `main`/`start` (`node dist/server.js`) has
+apparently been broken pre-existing, unrelated to this proposal, likely
+never exercised since local dev always runs `npm run dev` (`tsx
+src/server.ts`) instead. Rather than fix that repo-wide (out of scope here,
+and it's not obviously safe to change `tsconfig.json`'s `include`/`rootDir`
+without also affecting what CI's `Build` step type-checks), the runtime
+stage copies just `dist/src` back to `./dist`
+(`COPY --from=builder /app/dist/src ./dist`), which both restores the
+expected `dist/server.js` path and drops the compiled `test`/`scripts`
+output the image has no use for. This is safe because the only two modules
+that import anything outside `src/` (`mcp/server.ts` and
+`telemetry/instruments.ts`, both `import packageJson from
+'../../package.json'`) resolve that relative path against the runtime
+stage's own `/app/package.json` (copied in for `npm ci --omit=dev`
+regardless) once flattened — verified by simulating both stages'
+file layout by hand (no nested-Docker daemon available in this sandbox to
+run a literal `docker build`) and booting the result with `{"accounts":
+[]}`, confirming `GET /health` returns `{"status":"ok"}` and the MCP port
+responds correctly. Documented as a code comment directly in the
+Dockerfile. Left `package.json`'s `main`/`start` fields as-is since fixing
+them is unrelated to this proposal — flagged separately for a possible
+follow-up outside this task.
 **Acceptance criteria:** `docker build -t mail-tool-server:local .` succeeds
 locally. Running it with a mounted `config.json` (copied from
 `config.example.json`, pointed at a throwaway/dummy IMAP account so startup
 doesn't hang trying to actually connect — or with watch accounts left empty
 if the schema allows it) via `-v $(pwd)/config.json:/app/config.json -e
 CONFIG_PATH=/app/config.json -p 3000:3000 -p 3001:3001` boots and
-`curl localhost:3000/health` returns `{"status":"ok"}`.
+`curl localhost:3000/health` returns `{"status":"ok"}`. **Not run as a
+literal `docker build`/`docker run` in this session** — this sandbox has no
+working Docker daemon (no privileged overlay/netfilter access). Verified
+instead by manually reproducing both stages' exact file layout (including
+applying `.dockerignore`'s exclusions to the build context) and booting the
+result directly with `node`; the Dockerfile itself still needs a real
+`docker build`/`docker run` pass by a human before this is fully trusted.
 
 #### Task 2 — release-drafter config
 **Status:** TODO
