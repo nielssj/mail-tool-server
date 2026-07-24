@@ -123,23 +123,32 @@ body template is the only pointer from the release to the image.
   Docker build failed. Running `publish: true` as the last job, gated on
   `build-and-push` succeeding, avoids that failure mode entirely at the cost
   of one extra (cheap) `release-drafter` invocation per run.
-- **`package.json`'s `version` field is left untouched (stays `"1.0.0"`).**
-  The package is `"private": true` with no npm-registry target, so its
-  `version` field has no external consumer today; keeping it static avoids
-  the extra complexity of a workflow step that commits a version bump back
-  to `main` (which would itself need to avoid re-triggering the same
-  workflow in a loop). Version truth lives entirely in the release tag /
-  image tag. Worth revisiting if this package ever gets published to npm.
+- **`package.json`'s `version` field is left untouched (stays `"1.0.0"`) and
+  is never treated as a source of truth.** The package is `"private": true`
+  with no npm-registry target today, so nothing reads that field; keeping it
+  static avoids a workflow step that commits a version bump back to `main`
+  (which would itself need to avoid re-triggering the same workflow in a
+  loop). `release-drafter`'s resolved tag is the *only* version authority —
+  both for the release and the image tag. If this package is ever published
+  to npm, the recommended pattern is to override the on-disk version at
+  publish time rather than committing it: run `npm version
+  <resolved-version> --no-git-tag-version` (rewrites `package.json` in the
+  CI workspace only, no commit) immediately before `npm publish`, using the
+  same `release-drafter`-resolved version as this proposal's image tag —
+  keeping npm and image versions identical without ever hand-maintaining
+  `package.json`. (`npm publish` itself has no version-override flag; `npm
+  version` is the tool for that.) Not needed by this proposal's Docker-only
+  pipeline — captured here for when/if an npm registry target appears.
 - **Reuse existing labels (`enhancement` -> minor, `bug` -> patch) instead of
   introducing a full `major`/`minor`/`patch` label set.** Minimizes new
   process for contributors — only one new label (`breaking-change`) needs to
   be created and remembered. Unlabeled/other-labeled PRs default to a patch
   bump, so forgetting to label something never blocks a release, just
   under-bumps it (recoverable by hand-editing the draft before it publishes,
-  since drafts are visible/editable up until the `publish-release` job
-  runs... though note the automated `publish: true` job means that editing
-  window is only as long as `build-and-push` takes on a given run — see open
-  question below on whether that's acceptable).
+  since drafts are visible/editable up until the `publish-release` job runs
+  — though that window is only as long as `build-and-push` takes on a given
+  run, since there's no manual approval gate; see "Resolved decisions"
+  below).
 - **Tag format `v$RESOLVED_VERSION`** (e.g. `v1.4.0`) for both the Git tag/
   release name and the Docker image tag, so the two are trivially
   correlatable by eye. A floating `:latest` tag is updated on every
@@ -197,7 +206,7 @@ used just for this task's verification, removed again before merging, or
 sensible draft release body with correctly categorized entries and a
 plausible first version.
 
-#### Task 3 — `release.yaml` workflow
+#### Task 3 — `release.yaml` workflow + `v0.1.0` bootstrap
 **Status:** TODO
 **Description:** Implement the three-job pipeline described above
 (`draft-release` -> `build-and-push` -> `publish-release`), wiring
@@ -205,11 +214,28 @@ plausible first version.
 `build-and-push`, and gating `publish-release` on `build-and-push` via
 `needs`. Explicit `permissions: contents: write, packages: write` on the
 workflow (or per-job, whichever is cleaner once written).
-**Acceptance criteria:** A real merge to `main` (the natural trigger — no
-sensible way to fully dry-run a GHCR push) results in: a new image visible
-at `ghcr.io/nielssj/mail-tool-server` tagged both `latest` and the resolved
-version, and a published (non-draft) GitHub Release at that same tag with no
-attached files. Verified manually once this task's PR is merged.
+
+**One-time bootstrap, done by hand right after this task's PR merges (not by
+the workflow):** manually create and publish a `v0.1.0` GitHub Release (`gh
+release create v0.1.0 --title v0.1.0 --notes "Initial release: adds
+automated GHCR image publish + release-drafter versioning."`), and manually
+build + push the matching images (`docker build`, then push both
+`ghcr.io/nielssj/mail-tool-server:v0.1.0` and `:latest`) so the very first
+release and its image genuinely exist and correspond — the same invariant
+the automated pipeline enforces for every release after this one. This sets
+a known-good, real baseline for `release-drafter` to resolve *forward* from
+on the next merge (e.g. a `bug`-labeled PR after this bootstrap resolves to
+`v0.1.1`; an `enhancement`-labeled one resolves to `v0.2.0`), rather than
+depending on `release-drafter`'s no-prior-release fallback behavior (which
+bumps from `package.json`'s `"1.0.0"` and would land somewhere in the
+`v1.x`/`v2.x` range instead of the requested `v0.1.0` start).
+**Acceptance criteria:** After the manual `v0.1.0` bootstrap above, a real
+merge to `main` (the natural trigger — no sensible way to fully dry-run a
+GHCR push) results in: a new image visible at
+`ghcr.io/nielssj/mail-tool-server` tagged both `latest` and the resolved
+version (`v0.1.1`/`v0.2.0`/etc. depending on that PR's label), and a
+published (non-draft) GitHub Release at that same tag with no attached
+files. Verified manually once this task's PR is merged.
 
 #### Task 4 — Docs
 **Status:** TODO
@@ -224,23 +250,19 @@ and (b) the exact command to pull and run the latest published image.
 
 ---
 
-### Open questions / needs user input before Task 3 ships
+### Resolved decisions
 
-1. **Starting version.** No tags/releases exist yet. `release-drafter`
-   defaults to bumping from `package.json`'s `version` (`1.0.0`) if no prior
-   release tag is found, meaning the very first automated release would be
-   `v1.1.0`/`v1.0.1`/`v2.0.0` depending on the first labeled PR after this
-   ships — not `v1.0.0` or `v0.1.0`. Confirm that's acceptable, or whether an
-   initial `v0.1.0` (or `v1.0.0`) tag should be created by hand first so the
-   resolver has a real starting point to bump from.
-2. **GHCR package visibility.** GHCR packages default to **private** on
-   first push; making it public (if desired) is a one-time manual step in
-   the repo/package settings, not something the workflow YAML can set.
-   Confirm desired visibility.
-3. **Editing window on the draft before auto-publish.** Since
-   `publish-release` runs automatically right after `build-and-push`
-   succeeds (no manual approval gate), there's no human checkpoint between
-   "image pushed" and "release goes public" on a normal merge. Confirm that's
-   the desired level of automation (matches the "whenever we merge to main"
-   framing), versus e.g. requiring a manual `workflow_dispatch` approval
-   step before `publish-release`.
+1. **Starting version: `v0.1.0`.** Achieved via a one-time manual bootstrap
+   in Task 3 (real `v0.1.0` release + matching pushed images), not by
+   relying on `release-drafter`'s no-prior-release fallback — see Task 3.
+   Every release after that is fully automated, resolved forward from
+   `v0.1.0` by label.
+2. **GHCR package visibility: private.** This is already the GHCR default on
+   first push, so no extra workflow step or manual settings change is
+   needed — noted here as a confirmed, intentional choice rather than an
+   accident of the default.
+3. **No additional approval gate before `publish-release`.** PR review +
+   the existing `ci.yaml` checks (required before merge) are the gate.
+   Once a PR merges to `main`, the release/build/publish pipeline runs to
+   completion automatically with no further human checkpoint — matching the
+   "whenever we merge to main" framing in this proposal's goal.
