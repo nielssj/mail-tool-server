@@ -152,6 +152,48 @@ Example (`config.example.json`):
 On shutdown (`SIGINT`/`SIGTERM`) the server closes all watcher IDLE
 connections gracefully before exiting.
 
+## Container image
+
+Published to GitHub Container Registry (GHCR) on every merge to `main`, via
+[`.github/workflows/release.yaml`](.github/workflows/release.yaml).
+
+- **Image:** `ghcr.io/nielssj/mail-tool-server` — currently **private**, so
+  pulling it requires authenticating first: `docker login ghcr.io -u
+  <your-github-username>` with a token that has `read:packages` scope.
+- **Tags:** `vX.Y.Z`, the version
+  [release-drafter](https://github.com/release-drafter/release-drafter)
+  resolved for that merge, plus a floating `latest` updated on every
+  successful run.
+- **Release notes:** each image has a matching [GitHub
+  Release](https://github.com/nielssj/mail-tool-server/releases) at the
+  same tag — changelog only, no attached files; the image itself is the
+  release artifact.
+
+Pull and run it, supplying a real `config.json` (see
+[Configuration](#configuration) above) mounted at the path `CONFIG_PATH`
+points to:
+
+```sh
+docker pull ghcr.io/nielssj/mail-tool-server:latest
+docker run --rm \
+  -p 3000:3000 -p 3001:3001 \
+  -v $(pwd)/config.json:/app/config.json \
+  -e CONFIG_PATH=/app/config.json \
+  ghcr.io/nielssj/mail-tool-server:latest
+```
+
+### What triggers a version bump
+
+The label on a merged PR decides the next version (see
+[`.github/release-drafter.yml`](.github/release-drafter.yml) for the full
+config):
+
+| Label | Bump |
+| --- | --- |
+| `breaking-change` | major |
+| `enhancement` | minor |
+| everything else, including unlabeled, `bug`, `documentation` | patch (default) |
+
 ## HTTP API
 
 Start the server and open the interactive Swagger UI at
