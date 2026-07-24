@@ -14,8 +14,11 @@ the version and changelog that image corresponds to.
 - Deploying the image anywhere. This proposal only builds and publishes it.
 - Multi-arch images (`linux/amd64` only for v1) — noted as a possible
   follow-up.
-- Changes to the existing `ci.yaml` PR-check workflow — this is a new,
-  separate workflow, triggered differently (`push` to `main`, not `pull_request`).
+- Broad changes to the existing `ci.yaml` PR-check workflow — the
+  release/publish pipeline itself is a new, separate workflow, triggered
+  differently (`push` to `main`, not `pull_request`). (One small, explicitly
+  requested addition to `ci.yaml` — a `docker-build` smoke-test job — is in
+  scope; see Task 1.)
 - Bumping `package.json`'s `version` field — see design decision below.
 
 ### Stack additions
@@ -209,19 +212,34 @@ responds correctly. Documented as a code comment directly in the
 Dockerfile. Left `package.json`'s `main`/`start` fields as-is since fixing
 them is unrelated to this proposal — flagged separately for a possible
 follow-up outside this task.
+**Follow-up, same task/PR — `docker-build` CI job:** this sandbox has no
+working Docker daemon (confirmed: installing `docker.io` and starting
+`dockerd` fails here with `failed to mount overlay: operation not
+permitted` / an `iptables` permission error — no privileged
+overlay/netfilter access), so a literal `docker build`/`docker run` could
+only be simulated by hand, not actually executed, in this session. Since
+GitHub-hosted runners *do* have a working Docker daemon, added a new
+`docker-build` job to the existing `.github/workflows/ci.yaml` (out of this
+proposal's original scope, but small and directly needed to actually verify
+the Dockerfile — added with explicit go-ahead) that runs on every PR:
+`docker build`s the image, starts a container with a minimal `{"accounts":
+[]}` config mounted, polls `GET /health` for up to 20s, checks `GET /mcp`
+returns `405`, then always prints container logs and tears the container
+down. This becomes the permanent, real verification of the Dockerfile going
+forward (not just for this task) — every future PR that changes the
+Dockerfile, `package.json`, or app source gets a real `docker build` +
+boot-and-serve check before merge. Whether it's a *required* status check
+is a branch-protection setting, not something this workflow file controls —
+left for the user to configure if wanted.
 **Acceptance criteria:** `docker build -t mail-tool-server:local .` succeeds
 locally. Running it with a mounted `config.json` (copied from
 `config.example.json`, pointed at a throwaway/dummy IMAP account so startup
 doesn't hang trying to actually connect — or with watch accounts left empty
 if the schema allows it) via `-v $(pwd)/config.json:/app/config.json -e
 CONFIG_PATH=/app/config.json -p 3000:3000 -p 3001:3001` boots and
-`curl localhost:3000/health` returns `{"status":"ok"}`. **Not run as a
-literal `docker build`/`docker run` in this session** — this sandbox has no
-working Docker daemon (no privileged overlay/netfilter access). Verified
-instead by manually reproducing both stages' exact file layout (including
-applying `.dockerignore`'s exclusions to the build context) and booting the
-result directly with `node`; the Dockerfile itself still needs a real
-`docker build`/`docker run` pass by a human before this is fully trusted.
+`curl localhost:3000/health` returns `{"status":"ok"}`. Confirmed via the
+new `docker-build` CI job on this task's own PR (see below) rather than
+locally, since this sandbox can't run Docker at all.
 
 #### Task 2 — release-drafter config
 **Status:** TODO

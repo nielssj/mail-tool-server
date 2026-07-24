@@ -53,3 +53,56 @@ jobs:
 
       - name: Integration tests
         run: npm run test:integration
+
+  # Confirms the Dockerfile actually builds and the resulting image boots
+  # and serves traffic. There's no reliable way to verify this outside CI
+  # (it requires a real Docker daemon), so this is the source of truth for
+  # "does the Dockerfile work," not just a nice-to-have.
+  docker-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t mail-tool-server:ci .
+
+      - name: Start container
+        run: |
+          echo '{"accounts": []}' > /tmp/ci-config.json
+          docker run -d --name mail-tool-server-ci \
+            -p 3000:3000 -p 3001:3001 \
+            -v /tmp/ci-config.json:/app/config.json \
+            -e CONFIG_PATH=/app/config.json \
+            mail-tool-server:ci
+
+      - name: Wait for health check
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/health; then
+              echo "HTTP health check passed"
+              break
+            fi
+            if [ "$i" -eq 20 ]; then
+              echo "HTTP health check did not pass within 20s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Check MCP endpoint responds
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/mcp)
+          if [ "$status" != "405" ]; then
+            echo "Expected 405 from GET /mcp, got $status"
+            exit 1
+          fi
+
+      - name: Container logs
+        if: always()
+        run: docker logs mail-tool-server-ci
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f mail-tool-server-ci
