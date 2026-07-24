@@ -258,21 +258,59 @@ new `docker-build` CI job on this task's own PR (see below) rather than
 locally, since this sandbox can't run Docker at all.
 
 #### Task 2 — release-drafter config
-**Status:** TODO
-**Description:** Add `.github/release-drafter.yml` per the categories/
+**Status:** DONE
+**Description:** Added `.github/release-drafter.yml` per the categories/
 version-resolver table above, `tag-template`/`name-template`
 `v$RESOLVED_VERSION`, and a `template` whose body lists categorized PRs plus
 the `docker pull ghcr.io/nielssj/mail-tool-server:v$RESOLVED_VERSION` line.
-Create the one new `breaking-change` label (`gh label create breaking-change
---color ... --description "Bumps the major version"`).
-**Acceptance criteria:** Manually triggering `release-drafter` against the
-current repo state (e.g. via a scratch `workflow_dispatch`-only workflow
-used just for this task's verification, removed again before merging, or
-`gh api` / the `release-drafter` CLI locally if convenient) produces a
-sensible draft release body with correctly categorized entries and a
-plausible first version.
+Created the one new `breaking-change` label (`gh label create
+breaking-change --color b60205 --description "Bumps the major version
+(release-drafter)"`).
 
-#### Task 3 — `release.yaml` workflow + `v0.1.0` bootstrap
+**How this was actually verified (revised from the planned approach):** the
+acceptance criteria below assumed a scratch `workflow_dispatch` workflow
+could exercise `release-drafter` from a feature branch. Two dead ends found
+along the way, in order: (1) `workflow_dispatch` requires the workflow file
+to already exist on the *default* branch to be dispatchable via API at all
+— switched the scratch workflow to `pull_request` instead, which doesn't
+have that restriction; (2) even so, `release-drafter/release-drafter`
+itself fetches `.github/release-drafter.yml` via the GitHub API from the
+**default branch specifically**, regardless of which ref triggered the
+workflow — confirmed by the actual failure: `Configuration file
+.github/release-drafter.yml is not found. The configuration file must
+reside in your default branch.` So a live GitHub Actions run genuinely
+cannot validate this config before it's on `main`, no matter the trigger
+type.
+
+Instead of merging first to unlock a live run, installed the actual
+underlying package (`release-drafter-github-app` on npm — the real
+`release-drafter/release-drafter` source, not a live GitHub Action) in a
+scratch directory and called its internal `validateSchema` +
+`generateReleaseInfo` functions directly against this repo's real
+`.github/release-drafter.yml` and a set of realistic fake merged PRs
+(`breaking-change`, `enhancement`, `bug`, `documentation`, and one
+unlabeled). This is more precise than a live run would have been anyway —
+fully offline, repeatable, and inspects the exact rendered body rather than
+having to eyeball a GitHub UI draft. Confirmed: all four labeled categories
+render under the correct headings with the correct PRs; the unlabeled PR
+appears in `$CHANGES` without a category heading (release-drafter has no
+true wildcard/catch-all category — noted as a comment in the config); the
+`docker pull ...v$RESOLVED_VERSION` line substitutes correctly; and — most
+significantly — **omitting `version-resolver.patch` (relying on `default:
+patch` alone) does not crash**, because `validateSchema` deep-merges the
+user config onto `DEFAULT_CONFIG` before Joi validation runs, which
+back-fills `patch: { labels: [] }`. Also discovered along the way: with no
+prior release at all, `$RESOLVED_VERSION` **unconditionally resolves to
+`0.1.0`**, regardless of which labels are present on the triggering PRs
+(verified directly by calling `getVersionInfo` with `versionKeyIncrement`
+set to each of `major`/`minor`/`patch` with no prior release — all three
+return `0.1.0`). This changes Task 3 — see below.
+**Acceptance criteria:** A sensible draft release body with correctly
+categorized entries and a plausible first version — confirmed via the local
+harness described above rather than a live scratch workflow (not possible
+before this config exists on `main`; see above).
+
+#### Task 3 — `release.yaml` workflow
 **Status:** TODO
 **Description:** Implement the three-job pipeline described above
 (`draft-release` -> `build-and-push` -> `publish-release`), wiring
@@ -281,27 +319,24 @@ plausible first version.
 `needs`. Explicit `permissions: contents: write, packages: write` on the
 workflow (or per-job, whichever is cleaner once written).
 
-**One-time bootstrap, done by hand right after this task's PR merges (not by
-the workflow):** manually create and publish a `v0.1.0` GitHub Release (`gh
-release create v0.1.0 --title v0.1.0 --notes "Initial release: adds
-automated GHCR image publish + release-drafter versioning."`), and manually
-build + push the matching images (`docker build`, then push both
-`ghcr.io/nielssj/mail-tool-server:v0.1.0` and `:latest`) so the very first
-release and its image genuinely exist and correspond — the same invariant
-the automated pipeline enforces for every release after this one. This sets
-a known-good, real baseline for `release-drafter` to resolve *forward* from
-on the next merge (e.g. a `bug`-labeled PR after this bootstrap resolves to
-`v0.1.1`; an `enhancement`-labeled one resolves to `v0.2.0`), rather than
-depending on `release-drafter`'s no-prior-release fallback behavior (which
-bumps from `package.json`'s `"1.0.0"` and would land somewhere in the
-`v1.x`/`v2.x` range instead of the requested `v0.1.0` start).
-**Acceptance criteria:** After the manual `v0.1.0` bootstrap above, a real
-merge to `main` (the natural trigger — no sensible way to fully dry-run a
-GHCR push) results in: a new image visible at
-`ghcr.io/nielssj/mail-tool-server` tagged both `latest` and the resolved
-version (`v0.1.1`/`v0.2.0`/etc. depending on that PR's label), and a
-published (non-draft) GitHub Release at that same tag with no attached
-files. Verified manually once this task's PR is merged.
+**No manual `v0.1.0` bootstrap needed — revised after Task 2.** The
+original plan here was a one-time manual release + image push to seed a
+`v0.1.0` baseline, on the assumption that `release-drafter`'s
+no-prior-release fallback would instead bump from `package.json`'s
+`"1.0.0"` and land somewhere in `v1.x`/`v2.x`. Task 2's local testing
+against the actual `release-drafter` source disproved that assumption:
+with zero prior releases, `$RESOLVED_VERSION` unconditionally resolves to
+`0.1.0` regardless of any PR's labels — confirmed by direct function calls,
+not just documentation. So the very first real run of this workflow, on
+the very first merge to `main` after it ships, naturally produces exactly
+`v0.1.0` with no manual step. Every merge after that behaves normally
+(`semver.inc` off the real previous release).
+**Acceptance criteria:** A real merge to `main` (the natural trigger — no
+sensible way to fully dry-run a GHCR push) results in: a new image visible
+at `ghcr.io/nielssj/mail-tool-server` tagged both `latest` and `v0.1.0` (the
+very first run) or the correctly resolved next version (subsequent runs),
+and a published (non-draft) GitHub Release at that same tag with no
+attached files. Verified manually once this task's PR is merged.
 
 #### Task 4 — Docs
 **Status:** TODO
@@ -318,11 +353,15 @@ and (b) the exact command to pull and run the latest published image.
 
 ### Resolved decisions
 
-1. **Starting version: `v0.1.0`.** Achieved via a one-time manual bootstrap
-   in Task 3 (real `v0.1.0` release + matching pushed images), not by
-   relying on `release-drafter`'s no-prior-release fallback — see Task 3.
-   Every release after that is fully automated, resolved forward from
-   `v0.1.0` by label.
+1. **Starting version: `v0.1.0`.** Originally planned as a one-time manual
+   bootstrap release (see Task 3's original description in git history) on
+   the assumption `release-drafter`'s no-prior-release fallback would
+   otherwise bump from `package.json`'s `"1.0.0"`. Superseded during Task 2:
+   local testing directly against `release-drafter`'s source confirmed the
+   real fallback with zero prior releases is unconditionally `0.1.0`,
+   regardless of labels — no manual bootstrap needed. The very first real
+   run of Task 3's workflow produces `v0.1.0` on its own; every release
+   after that resolves normally from the real previous release.
 2. **GHCR package visibility: private.** This is already the GHCR default on
    first push, so no extra workflow step or manual settings change is
    needed — noted here as a confirmed, intentional choice rather than an
