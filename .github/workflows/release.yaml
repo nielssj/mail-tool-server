@@ -7,6 +7,11 @@ on:
 permissions:
   contents: write
   packages: write
+  # release-drafter needs this to list merged PRs / find commits between the
+  # last release and HEAD — not needed on a repo's very first run (no prior
+  # release to diff against), which is exactly why this was missed
+  # initially and only surfaced on the second real run.
+  pull-requests: read
 
 jobs:
   # Drafts (does not publish) the next release from .github/release-drafter.yml

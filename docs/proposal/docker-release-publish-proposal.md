@@ -440,6 +440,39 @@ and know (a) which label to add to a PR for a minor vs. patch vs. major
 release, and (b) the exact command to pull and run the latest published
 image. Both satisfied by the added section.
 
+#### Task 5 — Fix: missing `pull-requests: read` permission
+**Status:** DONE
+**Description:** The real second run of `release.yaml` (Task 4's PR
+merging to `main`) failed: `draft-release` errored with `Request failed due
+to following response errors: - Resource not accessible by integration`
+right after logging `Finding commits between refs/tags/v0.0.1 and
+refs/heads/main...`. The first run (Task 3's own merge) never hit this
+code path — there was no prior release to diff against yet, so it skipped
+straight to the no-baseline case — meaning Task 3's testing genuinely
+couldn't have caught this: the failing path only exists once a second
+release is attempted. Root cause, confirmed against `release-drafter`'s own
+README (not guessed): its documented minimal required permissions are
+`contents: write` **and** `pull-requests: read`; `release.yaml` only ever
+granted `contents: write` and `packages: write`. Fixed by adding
+`pull-requests: read` to the workflow-level `permissions:` block.
+
+Also surfaced by this run, non-fatal: deprecation warnings for every
+`categories[*].label(s)` and `version-resolver.{major,minor}.labels` field
+in `.github/release-drafter.yml` — v7 introduced a new unified schema
+(`categories[*].when`/`semver-increment`/`type: "version-resolver"`,
+replacing the separate `version-resolver` block entirely) and the old
+fields, while still functional today, are marked for future removal. Not
+fixed as part of this task — flagged to the user as a separate, lower-
+urgency follow-up, since getting `release-drafter` config subtleties wrong
+has already cost real production incidents twice in this proposal (Task
+2's version-fallback claim, this permission gap) and deserves its own
+dedicated verification pass rather than being bundled into an urgent fix.
+**Acceptance criteria:** The next merge to `main` after this fix succeeds
+end to end (all three jobs, including a real `draft-release` diffing
+against an existing prior release) — verified live, not simulated, since
+this exact failure mode was invisible to every prior local/CI verification
+method used in this proposal.
+
 ---
 
 ### Resolved decisions
