@@ -301,16 +301,32 @@ true wildcard/catch-all category — noted as a comment in the config); the
 significantly — **omitting `version-resolver.patch` (relying on `default:
 patch` alone) does not crash**, because `validateSchema` deep-merges the
 user config onto `DEFAULT_CONFIG` before Joi validation runs, which
-back-fills `patch: { labels: [] }`. Also discovered along the way: with no
-prior release at all, `$RESOLVED_VERSION` **unconditionally resolves to
-`0.1.0`**, regardless of which labels are present on the triggering PRs
-(verified directly by calling `getVersionInfo` with `versionKeyIncrement`
-set to each of `major`/`minor`/`patch` with no prior release — all three
-return `0.1.0`). This changes Task 3 — see below.
+back-fills `patch: { labels: [] }`. Also *thought* to have discovered along
+the way: with no prior release at all, `$RESOLVED_VERSION` unconditionally
+resolves to `0.1.0` regardless of labels (verified by calling
+`getVersionInfo` with `versionKeyIncrement` set to each of
+`major`/`minor`/`patch` with no prior release — all three returned
+`0.1.0`). **This turned out to be wrong** — see the "Resolved decisions"
+entry on starting version below. The local harness here was built against
+the npm package `release-drafter-github-app` at whatever version `npm
+install` resolved (`6.1.0`), never checked against the actually-deployed
+`v7.6.0` (a full rewrite, different internal logic entirely — different
+repo layout, different file organization, presumably more differences not
+yet enumerated). The real production run (see below) did independently
+confirm template rendering works (the actual published release body
+correctly substituted `v0.0.1` into the `docker pull ...` line) and that
+omitting `version-resolver.patch` doesn't crash (the real run didn't
+error). Categorization specifically wasn't re-confirmed against real
+labeled PRs in production yet — the triggering PR carried no label, so the
+real run's changelog body doesn't exercise that path. Worth a real check
+next time a labeled PR triggers a run, rather than continuing to lean on
+the mismatched-version harness for that claim.
 **Acceptance criteria:** A sensible draft release body with correctly
 categorized entries and a plausible first version — confirmed via the local
 harness described above rather than a live scratch workflow (not possible
-before this config exists on `main`; see above).
+before this config exists on `main`; see above). The specific *version
+number* claim from that harness was later found wrong on the real first
+run — see "Resolved decisions" below.
 
 #### Task 3 — `release.yaml` workflow
 **Status:** DONE
@@ -351,18 +367,21 @@ bumps. `actions/checkout` (GitHub-authored) and `docker/login-action`/
 call) were kept on major-version tags per explicit direction — SHA-pinning
 scope limited to `release-drafter` for this PR.
 
-**No manual `v0.1.0` bootstrap needed — revised after Task 2.** The
-original plan here was a one-time manual release + image push to seed a
-`v0.1.0` baseline, on the assumption that `release-drafter`'s
-no-prior-release fallback would instead bump from `package.json`'s
-`"1.0.0"` and land somewhere in `v1.x`/`v2.x`. Task 2's local testing
-against the actual `release-drafter` source disproved that assumption:
-with zero prior releases, `$RESOLVED_VERSION` unconditionally resolves to
-`0.1.0` regardless of any PR's labels — confirmed by direct function calls,
-not just documentation. So the very first real run of this workflow, on
-the very first merge to `main` after it ships, naturally produces exactly
-`v0.1.0` with no manual step. Every merge after that behaves normally
-(`semver.inc` off the real previous release).
+**No manual `v0.1.0` bootstrap done — and it turned out the real fallback
+isn't `0.1.0` either.** The original plan here was a one-time manual
+release + image push to seed a `v0.1.0` baseline. That was dropped after
+Task 2's local testing seemed to show `release-drafter`'s no-prior-release
+fallback is unconditionally `0.1.0` regardless of labels. Both the original
+assumption *and* the thing that superseded it were wrong: the real first
+run (this task's own PR merging to `main`) published `v0.0.1`, not
+`v0.1.0`. Root cause, confirmed by reading the actually-deployed `v7.6.0`
+source directly: with no prior release it starts from `0.0.0` and applies
+whatever bump the triggering PR's labels resolve to (correctly, unlike what
+Task 2's mismatched-version harness showed) — this PR carried no label, so
+`version-resolver.default: patch` applied, giving `0.0.1`. Presented to the
+user afterward with remediation options; decision was to accept `v0.0.1` as
+the real starting point rather than delete and re-bootstrap. Full writeup
+in "Resolved decisions" below.
 
 **Verification:** `release.yaml` itself triggers only on `push` to `main`,
 so — like Task 2's config — it cannot be exercised end to end before
@@ -383,39 +402,72 @@ GitHub's own docs, so this needed a classic-PAT-scoped `read:packages`/
 GitHub required deleting the whole package rather than just that one
 version). The package will be recreated fresh, correctly, on the first real
 `release.yaml` run.
-**Acceptance criteria:** A real merge to `main` results in: a new image
-visible at `ghcr.io/nielssj/mail-tool-server` tagged both `latest` and
-`v0.1.0` (the very first run) or the correctly resolved next version
-(subsequent runs), and a published (non-draft) GitHub Release at that same
-tag with no attached files. Still to be confirmed on an actual merge to
-`main` after this task's PR merges — the GHCR-push mechanism itself is now
-verified (above), but a full live run of all three jobs together, including
-the real `release-drafter` publish step, is not.
+**Acceptance criteria:** A real merge to `main` results in a new image
+visible at `ghcr.io/nielssj/mail-tool-server` tagged both `latest` and the
+correctly resolved version, and a published (non-draft) GitHub Release at
+that same tag with no attached files. **Confirmed on the real first merge**
+(this task's own PR): all three jobs succeeded, a real release
+([v0.0.1](https://github.com/nielssj/mail-tool-server/releases/tag/v0.0.1))
+was published with no attached files, and both `ghcr.io/nielssj/
+mail-tool-server:v0.0.1` and `:latest` were pushed with real digests. The
+resolved *version number* (`v0.0.1` instead of the intended `v0.1.0`) was
+wrong for reasons unrelated to this task's own logic — see "Resolved
+decisions" below — but the pipeline mechanics themselves (draft, build,
+push, gate, publish, no artifacts) are now verified end to end for real,
+not just locally simulated.
 
 #### Task 4 — Docs
-**Status:** TODO
-**Description:** README gets a short "Container image" section: where the
-image lives (`ghcr.io/nielssj/mail-tool-server`), the tag scheme (`vX.Y.Z` +
-`latest`), how to pull and run it (mirroring Task 1's manual test command),
-and a pointer to the label table above so contributors know which PR label
-drives which version bump.
-**Acceptance criteria:** A contributor can read the README section alone and
-know (a) which label to add to a PR for a minor vs. patch vs. major release,
-and (b) the exact command to pull and run the latest published image.
+**Status:** DONE
+**Description:** Added a "Container image" section to the README: where the
+image lives (`ghcr.io/nielssj/mail-tool-server`, noting it's currently
+**private** and requires `docker login ghcr.io` with `read:packages` first
+— GHCR packages default to private on first push, matching the "Resolved
+decisions" entry on visibility), the tag scheme (`vX.Y.Z` + `latest`), the
+pull/run command (mirroring Task 1's manual test command), a note that each
+image has a matching GitHub Release with no attached files, and a table
+mapping PR label -> version bump alongside a pointer to
+`.github/release-drafter.yml` for the full config.
+
+Also corrected the record on this doc itself while doing this task: the
+"Resolved decisions" entry on starting version, and the Task 2/Task 3
+write-ups, previously claimed `v0.1.0` would be (and was) the automatic
+starting point. The real first run (Task 3's own PR merging) published
+`v0.0.1` instead — see the corrected "Resolved decisions" entry below for
+the full root-cause writeup. Not this task's own work, but fixed here since
+it's a documentation-accuracy issue discovered while working in this file.
+**Acceptance criteria:** A contributor can read the README section alone
+and know (a) which label to add to a PR for a minor vs. patch vs. major
+release, and (b) the exact command to pull and run the latest published
+image. Both satisfied by the added section.
 
 ---
 
 ### Resolved decisions
 
-1. **Starting version: `v0.1.0`.** Originally planned as a one-time manual
-   bootstrap release (see Task 3's original description in git history) on
-   the assumption `release-drafter`'s no-prior-release fallback would
-   otherwise bump from `package.json`'s `"1.0.0"`. Superseded during Task 2:
-   local testing directly against `release-drafter`'s source confirmed the
-   real fallback with zero prior releases is unconditionally `0.1.0`,
-   regardless of labels — no manual bootstrap needed. The very first real
-   run of Task 3's workflow produces `v0.1.0` on its own; every release
-   after that resolves normally from the real previous release.
+1. **Starting version: actually `v0.0.1`, not `v0.1.0` — accepted as-is.**
+   Originally planned as a one-time manual bootstrap release, then
+   superseded during Task 2 after local testing seemed to show
+   `release-drafter`'s no-prior-release fallback is unconditionally `0.1.0`
+   regardless of labels, so no manual bootstrap was done. **That Task 2
+   finding was wrong**, discovered when Task 3's PR merged and the real
+   first run published `v0.0.1`: the local verification had tested against
+   the npm package `release-drafter-github-app` at whatever version `npm
+   install` resolved as latest (`6.1.0`) without checking it matched the
+   actually-deployed, SHA-pinned action (`v7.6.0`) — a full, unrelated
+   rewrite of the same project (different repo layout entirely:
+   `src/actions/drafter/lib/...` vs. the old `lib/`). Confirmed by reading
+   v7.6.0's real source directly: with no prior release, it starts from
+   `0.0.0` and applies whichever bump the merged PR's labels actually
+   resolved to (correct semver behavior, unlike what was tested) — since
+   the triggering PR carried no version label, `version-resolver.default:
+   patch` applied, giving `0.0.1`. Presented to the user with remediation
+   options (delete-and-rebootstrap at `v0.1.0`, merge a future
+   `enhancement`-labeled PR to bump to `v0.1.0` naturally, or accept
+   `v0.0.1`); **decision: accept `v0.0.1`** as the real starting point — no
+   corrective action taken, the release and images stand as published.
+   Lesson for future local verification against a pinned third-party
+   action: match the exact pinned version/commit, not just "whatever's
+   latest on npm" for a same-named package.
 2. **GHCR package visibility: private.** This is already the GHCR default on
    first push, so no extra workflow step or manual settings change is
    needed — noted here as a confirmed, intentional choice rather than an
