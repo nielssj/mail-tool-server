@@ -95,7 +95,7 @@ Dockerfile                     Multi-stage: `builder` (node:24-alpine,
 
 `release.yaml` jobs, in order:
 
-1. **`draft-release`** — runs `release-drafter/release-drafter@v6` with
+1. **`draft-release`** — runs `release-drafter/release-drafter@v7` with
    `publish: false` against `.github/release-drafter.yml`. Outputs
    `tag_name` (e.g. `v1.4.0`), used by both later jobs. This both keeps a
    live, always-current draft of "what the next release will look like"
@@ -105,13 +105,15 @@ Dockerfile                     Multi-stage: `builder` (node:24-alpine,
    `docker/login-action` using the built-in `GITHUB_TOKEN`, then builds the
    image from the new `Dockerfile` and pushes it via
    `docker/build-push-action`, tagged
-   `ghcr.io/nielssj/mail-tool-server:${{ needs.draft-release.outputs.tag_name }}`
-   and `ghcr.io/nielssj/mail-tool-server:latest`.
-3. **`publish-release`** (`needs: build-and-push`) — re-runs
-   `release-drafter/release-drafter@v6`, same config, with `publish: true`.
-   Because this job only runs after `build-and-push` succeeds, a published
-   release always has a matching image already sitting in GHCR — never a
-   public release pointing at an image that failed to build.
+   `ghcr.io/${{ github.repository }}:${{ needs.draft-release.outputs.tag_name }}`
+   and `ghcr.io/${{ github.repository }}:latest`.
+3. **`publish-release`** (`needs: [draft-release, build-and-push]`) —
+   re-runs `release-drafter/release-drafter@v7`, same config, with
+   `publish: true` and `tag`/`name` pinned to `draft-release`'s already-
+   resolved `tag_name` (not recomputed). Because this job only runs after
+   `build-and-push` succeeds, a published release always has a matching
+   image already sitting in GHCR — never a public release pointing at an
+   image that failed to build.
 
 No step uploads files to the release (no `actions/upload-release-asset`,
 no `softprops/action-gh-release` asset globs) — `release-drafter` alone
@@ -311,13 +313,27 @@ harness described above rather than a live scratch workflow (not possible
 before this config exists on `main`; see above).
 
 #### Task 3 — `release.yaml` workflow
-**Status:** TODO
-**Description:** Implement the three-job pipeline described above
-(`draft-release` -> `build-and-push` -> `publish-release`), wiring
-`draft-release`'s `tag_name` output through to the Docker tags in
-`build-and-push`, and gating `publish-release` on `build-and-push` via
-`needs`. Explicit `permissions: contents: write, packages: write` on the
-workflow (or per-job, whichever is cleaner once written).
+**Status:** DONE
+**Description:** Implemented the three-job pipeline (`draft-release` ->
+`build-and-push` -> `publish-release`), `permissions: contents: write,
+packages: write` set once at the workflow level. Two refinements beyond the
+original description: (1) image tags use `ghcr.io/${{ github.repository }}`
+rather than the hardcoded repo path, so it never drifts if the repo is ever
+renamed; (2) `publish-release` explicitly passes `tag`/`name` inputs pinned
+to `draft-release`'s already-resolved `tag_name` output (requires listing
+`draft-release` directly in `publish-release`'s own `needs:` — job outputs
+are only visible to *direct* dependents, not transitive ones), rather than
+letting `release-drafter` recompute the version a second time — closes a
+small race window where a PR merging to `main` between the two jobs could
+otherwise cause `publish-release` to publish a different version than the
+one `build-and-push` just tagged and pushed.
+
+Actions pinned to their current latest majors, verified via each action's
+real `action.yml`/GitHub releases rather than assumed from the earlier
+architecture sketch above (which had guessed `@v6`/`v3`): `release-drafter/
+release-drafter@v7` (confirmed output `tag_name` still exists, and a new
+`token` input defaults to `github.token` so nothing extra needs passing),
+`docker/login-action@v4`, `docker/build-push-action@v7`.
 
 **No manual `v0.1.0` bootstrap needed — revised after Task 2.** The
 original plan here was a one-time manual release + image push to seed a
@@ -331,12 +347,32 @@ not just documentation. So the very first real run of this workflow, on
 the very first merge to `main` after it ships, naturally produces exactly
 `v0.1.0` with no manual step. Every merge after that behaves normally
 (`semver.inc` off the real previous release).
-**Acceptance criteria:** A real merge to `main` (the natural trigger — no
-sensible way to fully dry-run a GHCR push) results in: a new image visible
-at `ghcr.io/nielssj/mail-tool-server` tagged both `latest` and `v0.1.0` (the
-very first run) or the correctly resolved next version (subsequent runs),
-and a published (non-draft) GitHub Release at that same tag with no
-attached files. Verified manually once this task's PR is merged.
+
+**Verification:** `release.yaml` itself triggers only on `push` to `main`,
+so — like Task 2's config — it cannot be exercised end to end before
+merging (no way to fully dry-run a GHCR push or a real release publish
+either). What *could* be verified for real without merging: whether
+`GITHUB_TOKEN` can actually push to this repo's GHCR at all — a genuine
+unknown (org/repo package-write policies aren't visible from the workflow
+file), not something to assume. Added a temporary `pull_request`-triggered
+scratch workflow that logged into GHCR and ran a real
+`docker/build-push-action` push to a throwaway `:scratch-test` tag. It
+succeeded — real digest returned, no errors — confirming the token/
+permissions setup works. Removed the scratch workflow afterward. **Leftover
+cleanup needed:** the `:scratch-test` package version itself is still
+sitting in GHCR — this session's token has no `packages:read`/
+`packages:delete` scope to remove it via API, so it needs deleting by hand
+(GitHub UI, or grant that scope) — harmless in the meantime, since
+`release.yaml` only ever pushes `:latest`/`:vX.Y.Z` tags, never
+`:scratch-test`.
+**Acceptance criteria:** A real merge to `main` results in: a new image
+visible at `ghcr.io/nielssj/mail-tool-server` tagged both `latest` and
+`v0.1.0` (the very first run) or the correctly resolved next version
+(subsequent runs), and a published (non-draft) GitHub Release at that same
+tag with no attached files. Still to be confirmed on an actual merge to
+`main` after this task's PR merges — the GHCR-push mechanism itself is now
+verified (above), but a full live run of all three jobs together, including
+the real `release-drafter` publish step, is not.
 
 #### Task 4 — Docs
 **Status:** TODO
