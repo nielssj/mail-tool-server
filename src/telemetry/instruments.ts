@@ -61,7 +61,7 @@ export const watcherEvents = meter.createCounter('mailtool.watcher.events', {
 
 export const watcherNewMailMessages = meter.createCounter('mailtool.watcher.new_mail.messages', {
   description:
-    'Count of new messages observed by the watcher — incremented by (count - previousCount) per newMail event, not just once per event.',
+    'Count of new messages observed by the watcher — one newMail event is already exactly one message, so this increments by 1 per event.',
   unit: '{message}'
 });
 

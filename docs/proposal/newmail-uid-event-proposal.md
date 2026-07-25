@@ -247,7 +247,7 @@ part of Task 1's acceptance criteria, not a follow-up:
 ### Task Breakdown
 
 #### Task 1 — Watcher UID enrichment + per-message emission
-**Status:** Not started
+**Status:** DONE
 **Description:**
 - Widen `MailboxOpenResult`/`WatcherClient` (`src/imap/watcher.ts`) to
   surface `uidNext`/`uidValidity` from `mailboxOpen`, and add a `fetch`
@@ -285,6 +285,61 @@ part of Task 1's acceptance criteria, not a follow-up:
   "Verification" above pass against a real IMAP server with real IDLE.
 - `npm run lint`, `npx tsc -p tsconfig.json --noEmit`, `npm test`,
   `npm run test:integration` all green.
+
+**What actually happened / deviations found:**
+
+- **The sequencing fix needed to be broader than "await before
+  round-robining."** Implementing point 3's mitigation surfaced a second,
+  related race the design section hadn't separately named: if a mailbox
+  receives more than one `EXISTS` notification *within the same IDLE
+  session* (e.g. two single-message arrivals in quick succession, before
+  the first one's enrichment fetch has settled), a naive fire-and-forget
+  `fetch()` per `handleExists` call would let both enrichment fetches race
+  for the same UID watermark, risking duplicate or skipped UIDs. Fixed by
+  chaining enrichment work through a single `pendingEnrichment` promise
+  (`this.pendingEnrichment = (this.pendingEnrichment ?? Promise.resolve()).then(...)`)
+  rather than only gating at the round-robin boundary — this serializes
+  *all* enrichment for a watcher, not just the one at the mailbox-switch
+  boundary, and `beginIdle()`'s await of `this.pendingEnrichment` then
+  covers both cases for free.
+- **`test/dispatcher.test.ts` needed updating too — not called out in the
+  original ripple-effects list.** Its own `MockWatcherClient` (separate
+  from `test/watcher.test.ts`'s) had no `fetchAll`/`uidNext`, so its
+  `newMail`-fan-out assertions were silently hitting the "no watermark,
+  skip" degradation path and dropping the event. Fixed by adding
+  `uidNext`/`uidValidity` and a `fetchAll` mock, matching the pattern used
+  everywhere else. Also had to relax one assertion from strict emission
+  order to set membership: `newMail`'s dispatch is now a few microtask
+  hops behind `flagsChanged`/`mailRemoved` (it awaits the enrichment fetch
+  first), so cross-event-type ordering is no longer guaranteed within one
+  `handleExists`/`handleFlags`/`handleExpunge` burst.
+- **Two more real files referenced the old delta wording and needed
+  updating**, found by grepping for `previousCount` after the schema
+  change rather than by re-reading the original ripple list:
+  `src/telemetry/instruments.ts`'s `mailtool.watcher.new_mail.messages`
+  description, and its mirror in `docs/metrics.md`'s catalog table. Also
+  `test/dispatcherMetrics.test.ts` and `test/webhookDispatcher.test.ts`
+  both construct a literal `NewMailEvent` fixture that no longer type-checks
+  under the new schema — updated to `{ uid, count }`.
+- **Local verification: full green.** `npm run lint`, `npx tsc -p
+  tsconfig.json --noEmit`, and `npm test` (198 tests across 33 files,
+  including the new watcher/watcherMetrics/dispatcher cases) all pass.
+- **`npm run test:integration` could not be executed in this sandbox** —
+  confirmed via `docker info` failing outright, and via
+  `testcontainers`'s own error ("Could not find a working container
+  runtime strategy") when actually running the suite. This is the same
+  sandbox limitation encountered during the earlier Docker-image work, not
+  something new to this task. The two new GreenMail scenarios (burst UIDs,
+  multi-mailbox round-robin attribution) and the updated existing scenario
+  are written and type-check/lint cleanly, and the test file loads and
+  reaches real container startup before failing — but their actual
+  real-server behavior is **unverified pending a real run**. This repo's
+  CI already runs `npm run test:integration` as the `integration` job on
+  GitHub-hosted runners (real Docker) — that CI run against this PR is the
+  real verification step for this part of the acceptance criteria, the
+  same pattern as the `docker-build` CI job served for the earlier Docker
+  work. Recommend checking that job's actual result before treating Task 1
+  as fully verified, not just merged.
 
 ### Resolved decisions
 

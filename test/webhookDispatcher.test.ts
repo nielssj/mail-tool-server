@@ -8,7 +8,7 @@ const NEW_MAIL_EVENT: DomainEvent = {
   event: 'newMail',
   accountId: 'acc-1',
   mailbox: 'INBOX',
-  data: { count: 5, previousCount: 4 },
+  data: { uid: 5, count: 5 },
   timestamp: '2024-06-01T00:00:00.000Z'
 };
 

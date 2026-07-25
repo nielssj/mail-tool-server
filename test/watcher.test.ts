@@ -15,11 +15,22 @@ const ACCOUNT = {
   dispatchers: []
 };
 
+type MailboxOpenResult = {
+  exists?: number;
+  uidNext?: number;
+  uidValidity?: bigint;
+};
+
 type MockWatcherOverrides = Partial<{
   connect: () => Promise<void>;
   logout: () => Promise<void>;
-  mailboxOpen: (path: string) => Promise<{ exists?: number }>;
+  mailboxOpen: (path: string) => Promise<MailboxOpenResult>;
   idle: () => Promise<void>;
+  fetchAll: (
+    range: string,
+    query: { uid: true },
+    options: { uid: true }
+  ) => Promise<Array<{ uid: number }>>;
 }>;
 
 const buildWatcherCtor = (overrides: MockWatcherOverrides = {}) => {
@@ -31,6 +42,7 @@ const buildWatcherCtor = (overrides: MockWatcherOverrides = {}) => {
   const idle = vi.fn(
     overrides.idle ?? (() => new Promise<void>(() => undefined))
   );
+  const fetchAll = vi.fn(overrides.fetchAll ?? (() => Promise.resolve([])));
   const instances: MockWatcherClient[] = [];
 
   class MockWatcherClient extends EventEmitter {
@@ -38,6 +50,7 @@ const buildWatcherCtor = (overrides: MockWatcherOverrides = {}) => {
     logout = logout;
     mailboxOpen = mailboxOpen;
     idle = idle;
+    fetchAll = fetchAll;
 
     constructor() {
       super();
@@ -51,6 +64,7 @@ const buildWatcherCtor = (overrides: MockWatcherOverrides = {}) => {
     logout,
     mailboxOpen,
     idle,
+    fetchAll,
     instances
   };
 };
@@ -60,9 +74,11 @@ afterEach(() => {
 });
 
 describe('AccountWatcher', () => {
-  it('emits newMail when exists count increases', async () => {
-    const { ctor, instances, connect, mailboxOpen } = buildWatcherCtor({
-      mailboxOpen: () => Promise.resolve({ exists: 2 })
+  it('emits one newMail event per new message, each carrying uid and count', async () => {
+    const { ctor, instances, connect, mailboxOpen, fetchAll } = buildWatcherCtor({
+      mailboxOpen: () =>
+        Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n }),
+      fetchAll: () => Promise.resolve([{ uid: 3 }, { uid: 4 }, { uid: 5 }])
     });
     const now = () => new Date('2024-01-02T03:04:05.000Z');
     const watcher = new AccountWatcher(ACCOUNT, {
@@ -79,21 +95,243 @@ describe('AccountWatcher', () => {
 
     instances[0]?.emit('exists', 5);
 
+    await vi.waitFor(() => {
+      if (events.length < 3) {
+        throw new Error('waiting for newMail events');
+      }
+    });
+
+    expect(fetchAll).toHaveBeenCalledWith('3:*', { uid: true }, { uid: true });
     expect(events).toEqual([
       {
         event: 'newMail',
         accountId: 'acc-1',
         mailbox: 'INBOX',
-        data: {
-          count: 5,
-          previousCount: 2
-        },
+        data: { uid: 3, count: 5 },
+        timestamp: '2024-01-02T03:04:05.000Z'
+      },
+      {
+        event: 'newMail',
+        accountId: 'acc-1',
+        mailbox: 'INBOX',
+        data: { uid: 4, count: 5 },
+        timestamp: '2024-01-02T03:04:05.000Z'
+      },
+      {
+        event: 'newMail',
+        accountId: 'acc-1',
+        mailbox: 'INBOX',
+        data: { uid: 5, count: 5 },
         timestamp: '2024-01-02T03:04:05.000Z'
       }
     ]);
 
     await watcher.stop();
   });
+
+  it('retries the UID enrichment fetch once before giving up', async () => {
+    let calls = 0;
+    const fetchAll = vi.fn(() => {
+      calls += 1;
+      return calls === 1
+        ? Promise.reject(new Error('transient'))
+        : Promise.resolve([{ uid: 3 }]);
+    });
+    const { ctor, instances } = buildWatcherCtor({
+      mailboxOpen: () =>
+        Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n }),
+      fetchAll
+    });
+    const watcher = new AccountWatcher(ACCOUNT, { WatcherClientCtor: ctor });
+    const events: unknown[] = [];
+    watcher.on('newMail', (event) => events.push(event));
+
+    await watcher.start();
+    instances[0]?.emit('exists', 3);
+
+    await vi.waitFor(() => {
+      if (events.length < 1) {
+        throw new Error('waiting for newMail event');
+      }
+    });
+
+    expect(fetchAll).toHaveBeenCalledTimes(2);
+    expect(events).toHaveLength(1);
+
+    await watcher.stop();
+  });
+
+  it('skips the cycle and logs when enrichment keeps failing, leaving the watermark unadvanced', async () => {
+    const fetchAll = vi.fn(
+      () => Promise.reject(new Error('down')) as Promise<Array<{ uid: number }>>
+    );
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const { ctor, instances } = buildWatcherCtor({
+      mailboxOpen: () =>
+        Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n }),
+      fetchAll
+    });
+    const watcher = new AccountWatcher(ACCOUNT, {
+      WatcherClientCtor: ctor,
+      logger
+    });
+    const events: unknown[] = [];
+    watcher.on('newMail', (event) => events.push(event));
+
+    await watcher.start();
+    instances[0]?.emit('exists', 3);
+
+    await vi.waitFor(() => {
+      if (fetchAll.mock.calls.length < 2) {
+        throw new Error('waiting for retry to exhaust');
+      }
+    });
+
+    expect(events).toHaveLength(0);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+
+    // A later successful fetch re-requests from the same, unadvanced
+    // watermark -- nothing was silently skipped.
+    fetchAll.mockImplementation(() =>
+      Promise.resolve([{ uid: 3 }, { uid: 4 }])
+    );
+    instances[0]?.emit('exists', 4);
+
+    await vi.waitFor(() => {
+      if (events.length < 2) {
+        throw new Error('waiting for newMail events');
+      }
+    });
+
+    expect(fetchAll).toHaveBeenLastCalledWith('3:*', { uid: true }, { uid: true });
+
+    await watcher.stop();
+  });
+
+  it(
+    'waits for in-flight newMail enrichment before round-robining to the next mailbox',
+    async () => {
+      let resolveFetch!: (value: Array<{ uid: number }>) => void;
+      const fetchPromise = new Promise<Array<{ uid: number }>>((resolve) => {
+        resolveFetch = resolve;
+      });
+      const fetchAll = vi.fn(() => fetchPromise);
+
+      const mailboxOpen = vi.fn((path: string) =>
+        path === 'INBOX'
+          ? Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n })
+          : Promise.resolve({ exists: 0, uidNext: 1, uidValidity: 9n })
+      );
+
+      const idle = vi.fn(
+        () => new Promise<void>((resolve) => setTimeout(resolve, 5))
+      );
+
+      const { ctor, instances } = buildWatcherCtor({
+        mailboxOpen,
+        fetchAll,
+        idle
+      });
+      const watcher = new AccountWatcher(
+        { ...ACCOUNT, watchMailboxes: ['INBOX', 'Archive'] },
+        { WatcherClientCtor: ctor }
+      );
+
+      await watcher.start();
+      instances[0]?.emit('exists', 5);
+
+      // Long enough for the exists handler's microtask chain to reach
+      // fetchAll, and for idle()'s 5ms mock delay to resolve and enter the
+      // round-robin continuation -- while the enrichment fetch is still
+      // deliberately left unresolved.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(fetchAll).toHaveBeenCalledTimes(1);
+      expect(mailboxOpen).toHaveBeenCalledTimes(1);
+      expect(mailboxOpen).not.toHaveBeenCalledWith('Archive');
+
+      resolveFetch([{ uid: 3 }, { uid: 4 }, { uid: 5 }]);
+
+      await vi.waitFor(() => {
+        if (!mailboxOpen.mock.calls.some((call) => call[0] === 'Archive')) {
+          throw new Error('waiting for round-robin to Archive');
+        }
+      });
+
+      await watcher.stop();
+    },
+    10_000
+  );
+
+  it(
+    'resets the UID watermark when uidValidity changes between opens of the same mailbox',
+    async () => {
+      const opensByMailbox: Record<string, number> = {};
+      const mailboxOpen = vi.fn((path: string) => {
+        opensByMailbox[path] = (opensByMailbox[path] ?? 0) + 1;
+        if (path === 'INBOX' && opensByMailbox[path] === 1) {
+          return Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n });
+        }
+        if (path === 'INBOX') {
+          // Second open: server-side rebuild changed uidValidity, and
+          // uidNext along with it -- previously-seen UIDs are meaningless.
+          return Promise.resolve({ exists: 1, uidNext: 50, uidValidity: 2n });
+        }
+        return Promise.resolve({ exists: 0, uidNext: 1, uidValidity: 9n });
+      });
+      const fetchAll = vi.fn(() => Promise.resolve([{ uid: 50 }]));
+
+      let idleCalls = 0;
+      const idle = vi.fn(() => {
+        idleCalls += 1;
+        if (idleCalls <= 2) {
+          return new Promise<void>((resolve) => setTimeout(resolve, 1));
+        }
+        // Parks the watcher idling on INBOX's second open indefinitely, so
+        // there's a stable window to assert against.
+        return new Promise<void>(() => undefined);
+      });
+
+      const { ctor, instances } = buildWatcherCtor({
+        mailboxOpen,
+        fetchAll,
+        idle
+      });
+      const watcher = new AccountWatcher(
+        { ...ACCOUNT, watchMailboxes: ['INBOX', 'Archive'] },
+        { WatcherClientCtor: ctor }
+      );
+      const events: unknown[] = [];
+      watcher.on('newMail', (event) => events.push(event));
+
+      await watcher.start();
+
+      await vi.waitFor(
+        () => {
+          if ((opensByMailbox['INBOX'] ?? 0) < 2) {
+            throw new Error('waiting for INBOX to be reopened');
+          }
+        },
+        { timeout: 5000 }
+      );
+
+      instances[0]?.emit('exists', 2);
+
+      await vi.waitFor(() => {
+        if (events.length < 1) {
+          throw new Error('waiting for newMail event');
+        }
+      });
+
+      // uidNext was reset to 50 on reopen, so the watermark is 49, not the
+      // stale 2 from the first open -- proves the reset, not a leftover
+      // range from before uidValidity changed.
+      expect(fetchAll).toHaveBeenCalledWith('50:*', { uid: true }, { uid: true });
+
+      await watcher.stop();
+    },
+    10_000
+  );
 
   it('emits flagsChanged with the updated flags payload', async () => {
     const { ctor, instances } = buildWatcherCtor();

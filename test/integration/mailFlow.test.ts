@@ -84,6 +84,21 @@ const makeAccount = (host: string, port: number): AccountConfig => ({
   dispatchers: []
 });
 
+const makeAccountWithMailboxes = (
+  host: string,
+  port: number,
+  id: string,
+  watchMailboxes: string[]
+): AccountConfig => ({
+  id,
+  host,
+  port,
+  secure: false,
+  auth: { user: USER, pass: PASS },
+  watchMailboxes,
+  dispatchers: []
+});
+
 const connectClient = async (host: string, port: number): Promise<ImapFlow> => {
   const client = new ImapFlow({
     host,
@@ -278,10 +293,15 @@ describe('integration: real IMAP flow against GreenMail', () => {
       expect((archiveRes.json() as unknown[]).length).toBe(1);
 
       // 6. Webhook assertion: append a fresh message while the watcher idles
-      //    on INBOX and assert a real newMail event reaches the receiver.
+      //    on INBOX and assert a real newMail event reaches the receiver,
+      //    carrying the message's real UID (from IMAP APPEND's own UIDPLUS
+      //    response, not just inferred).
       const appender = await connectClient(host, port);
-      await appender.append('INBOX', rawMessage('Second message', 'incoming'));
+      const appended = await appender.append('INBOX', rawMessage('Second message', 'incoming'));
       await appender.logout();
+      if (!appended || typeof appended.uid !== 'number') {
+        throw new Error('APPEND did not return a UID -- does GreenMail support UIDPLUS here?');
+      }
 
       const event = await waitForEvent(
         (e) => e.event === 'newMail' && e.mailbox === 'INBOX'
@@ -289,11 +309,155 @@ describe('integration: real IMAP flow against GreenMail', () => {
       expect(event.accountId).toBe(account.id);
       expect(event.event).toBe('newMail');
       if (event.event === 'newMail') {
-        expect(event.data.count).toBeGreaterThan(event.data.previousCount);
+        expect(event.data.uid).toBe(appended.uid);
+        expect(event.data.count).toBeGreaterThan(0);
       }
       expect(typeof event.timestamp).toBe('string');
     } finally {
       await app.close();
+    }
+  };
+
+  it('reports one newMail event per message, with correct UIDs, for a burst of simultaneous arrivals', async () => {
+    try {
+      await runBurstScenario();
+    } catch (error) {
+      await dumpContainerLogs(container);
+      throw new Error(describeError(error), { cause: error });
+    }
+  });
+
+  const runBurstScenario = async (): Promise<void> => {
+    const mailbox = 'Burst';
+    const seed = await connectClient(host, port);
+    await seed.mailboxCreate(mailbox);
+    await seed.logout();
+
+    const account = makeAccountWithMailboxes(host, port, 'it-account-burst', [mailbox]);
+    const watcher = new AccountWatcher(account, { reconnectDelayMs: 500 });
+    const dispatcher = createDispatcher({ type: 'webhook', url: webhookUrl });
+    subscribeWatcher(watcher, [dispatcher]);
+
+    await watcher.start();
+
+    try {
+      const appender = await connectClient(host, port);
+      const appended = await Promise.all([
+        appender.append(mailbox, rawMessage('Burst 1', 'one')),
+        appender.append(mailbox, rawMessage('Burst 2', 'two')),
+        appender.append(mailbox, rawMessage('Burst 3', 'three'))
+      ]);
+      await appender.logout();
+
+      const expectedUids = appended
+        .map((res) => (res ? res.uid : undefined))
+        .filter((uid): uid is number => typeof uid === 'number')
+        .sort((a, b) => a - b);
+      if (expectedUids.length !== 3) {
+        throw new Error('one or more APPENDs did not return a UID -- does GreenMail support UIDPLUS here?');
+      }
+
+      // Poll rather than waitForEvent's single-match predicate -- this
+      // scenario needs all 3 events, and a real server is free to deliver
+      // a multi-message arrival as either one coalesced EXISTS jump or
+      // several small ones (both are valid IMAP behavior), so there is no
+      // single predicate to wait for up front the way the other scenarios
+      // have. Either way this codebase must still end up emitting exactly
+      // one newMail event per message, which is what's asserted below.
+      const start = Date.now();
+      let events: DomainEvent[] = [];
+      while (Date.now() - start < 30_000) {
+        events = received.filter((e) => e.event === 'newMail' && e.mailbox === mailbox);
+        if (events.length >= 3) {
+          break;
+        }
+        await delay(200);
+      }
+
+      expect(events).toHaveLength(3);
+      const receivedUids = events
+        .map((e) => (e.event === 'newMail' ? e.data.uid : undefined))
+        .filter((uid): uid is number => typeof uid === 'number')
+        .sort((a, b) => a - b);
+      expect(receivedUids).toEqual(expectedUids);
+    } finally {
+      await watcher.stop();
+    }
+  };
+
+  it('correctly attributes newMail events per mailbox when round-robining across two mailboxes', async () => {
+    try {
+      await runRoundRobinScenario();
+    } catch (error) {
+      await dumpContainerLogs(container);
+      throw new Error(describeError(error), { cause: error });
+    }
+  });
+
+  const runRoundRobinScenario = async (): Promise<void> => {
+    const mailboxA = 'RRInboxA';
+    const mailboxB = 'RRInboxB';
+    const seed = await connectClient(host, port);
+    await seed.mailboxCreate(mailboxA);
+    await seed.mailboxCreate(mailboxB);
+    await seed.logout();
+
+    const account = makeAccountWithMailboxes(host, port, 'it-account-rr', [mailboxA, mailboxB]);
+    const watcher = new AccountWatcher(account, { reconnectDelayMs: 500 });
+    const dispatcher = createDispatcher({ type: 'webhook', url: webhookUrl });
+    subscribeWatcher(watcher, [dispatcher]);
+
+    await watcher.start();
+
+    try {
+      const appender = await connectClient(host, port);
+
+      // The first message is what drives the watcher's round-robin from A
+      // to B in the first place (IDLE only breaks on a real server event or
+      // a command of our own -- our own enrichment fetch is that command).
+      // A message that arrives in B before the watcher ever opens B would
+      // be folded into that open's baseline and never reported, the same
+      // accepted round-robin-gap limitation this repo already documents --
+      // so this scenario deliberately waits for A's event, then gives the
+      // round-robin continuation a moment to actually reach and open B,
+      // before appending to B.
+      const appendedA = await appender.append(mailboxA, rawMessage('RR A', 'a'));
+      if (!appendedA || typeof appendedA.uid !== 'number') {
+        throw new Error('append to mailbox A did not return a UID -- does GreenMail support UIDPLUS here?');
+      }
+
+      const eventA = await waitForEvent(
+        (e) => e.event === 'newMail' && e.mailbox === mailboxA
+      );
+      expect(eventA.event).toBe('newMail');
+      if (eventA.event === 'newMail') {
+        expect(eventA.data.uid).toBe(appendedA.uid);
+      }
+
+      await delay(500);
+
+      const appendedB = await appender.append(mailboxB, rawMessage('RR B', 'b'));
+      if (!appendedB || typeof appendedB.uid !== 'number') {
+        throw new Error('append to mailbox B did not return a UID -- does GreenMail support UIDPLUS here?');
+      }
+
+      const eventB = await waitForEvent(
+        (e) => e.event === 'newMail' && e.mailbox === mailboxB
+      );
+      expect(eventB.event).toBe('newMail');
+      if (eventB.event === 'newMail') {
+        expect(eventB.data.uid).toBe(appendedB.uid);
+      }
+
+      await appender.logout();
+
+      // No cross-contamination: A's event never claims to be in B and
+      // vice versa -- the actual empirical test of the enrichment/
+      // round-robin sequencing fix, something a mock can't prove.
+      expect(eventA.mailbox).toBe(mailboxA);
+      expect(eventB.mailbox).toBe(mailboxB);
+    } finally {
+      await watcher.stop();
     }
   };
 });

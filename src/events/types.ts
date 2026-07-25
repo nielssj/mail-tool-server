@@ -3,8 +3,13 @@ export type NewMailEvent = {
   accountId: string;
   mailbox: string;
   data: {
+    /** UID of this newly-arrived message. One event per message. */
+    uid: number;
+    /** Mailbox's total message count as observed when this message's
+     * arrival was detected -- the same value on every event emitted from a
+     * single burst of messages arriving at once, not a synthesized
+     * per-message running total. */
     count: number;
-    previousCount: number;
   };
   timestamp: string;
 };

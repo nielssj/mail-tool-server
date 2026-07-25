@@ -28,8 +28,11 @@ const buildWatcherCtor = () => {
   class MockWatcherClient extends EventEmitter {
     connect = vi.fn(() => Promise.resolve());
     logout = vi.fn(() => Promise.resolve());
-    mailboxOpen = vi.fn(() => Promise.resolve({ exists: 0 }));
+    mailboxOpen = vi.fn(() =>
+      Promise.resolve({ exists: 0, uidNext: 1, uidValidity: 1n })
+    );
     idle = idle;
+    fetchAll = vi.fn(() => Promise.resolve([{ uid: 1 }]));
 
     constructor() {
       super();
@@ -86,9 +89,14 @@ describe('subscribeWatcher', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(stubDispatcher.handle).toHaveBeenCalledTimes(3);
-    expect(received[0]).toMatchObject({ event: 'newMail' });
-    expect(received[1]).toMatchObject({ event: 'flagsChanged' });
-    expect(received[2]).toMatchObject({ event: 'mailRemoved' });
+    // newMail's dispatch is a few microtask hops behind flagsChanged/
+    // mailRemoved now (it awaits the UID enrichment fetch first), so cross-
+    // event-type ordering isn't guaranteed -- assert membership, not order.
+    expect(received.map((e) => e.event).sort()).toEqual([
+      'flagsChanged',
+      'mailRemoved',
+      'newMail'
+    ]);
 
     await watcher.stop();
     void now;
