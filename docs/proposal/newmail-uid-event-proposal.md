@@ -1,8 +1,8 @@
 ## `newMail` Event UID — Solution Proposal
 
-**Goal:** Extend the `newMail` domain event's `data` payload with the UID(s)
-of the message(s) that just arrived, so a webhook consumer can act on the
-specific new message(s) directly instead of having to poll `list_messages`
+**Goal:** Change the `newMail` domain event to fire once per newly-arrived
+message, carrying that message's UID, so a webhook consumer can act on a
+specific new message directly instead of having to poll `list_messages`
 (or `mailboxService.listMessages`) and diff against its own client-side
 watermark just to find out what changed.
 
@@ -18,23 +18,31 @@ in this codebase — the new part is triggering it from inside the watcher's
 live IDLE loop rather than from a caller-initiated request, which has a
 sequencing hazard that request-driven code never has to deal with.
 
+**This is a breaking change to the event schema**, per explicit steer:
+`newMail` moves from one batched event per `EXISTS` jump (`count`,
+`previousCount`) to one event per message (`uid`, `count`).
+`previousCount` is dropped; `count` is kept.
+
 **Out of scope for this proposal:**
-- Any change to `flagsChanged`/`mailRemoved` — both already carry `uid`.
-- A new MCP tool or HTTP route. This is purely an event-payload enrichment.
-- `webhookDispatcher.ts` — it serializes the whole `DomainEvent` as JSON
-  already (`src/events/dispatchers/webhookDispatcher.ts:29`), so a new
-  optional `data` field needs zero changes there.
-- Backfilling UIDs for events that would have fired before this ships.
-- Deduplicating/correlating UIDs across reconnects beyond what's described
-  below (e.g. no persistence of watermarks across process restarts — see
-  "Open questions").
+- Any change to `flagsChanged`/`mailRemoved` — both already carry `uid` and
+  already fire once per message.
+- A new MCP tool or HTTP route. This is purely an event-payload/emission
+  change.
+- `webhookDispatcher.ts` — it serializes whatever `DomainEvent` it's handed
+  as JSON already (`src/events/dispatchers/webhookDispatcher.ts:29`); it has
+  no opinion on how many events fire per `EXISTS` jump, so it needs zero
+  changes.
+- Backfilling UIDs/re-emitting for mail that arrived before this ships.
+- Capping burst size (e.g. a 5,000-message bulk import producing 5,000
+  events) — raised and explicitly dropped as not relevant for this pass.
 
 ### Current behavior
 
 `AccountWatcher.handleExists` (`src/imap/watcher.ts:314-338`) compares the
 new `EXISTS` count to a per-mailbox count it tracks in memory
-(`mailboxCounts`), and emits `newMail` with `{ count, previousCount }` when
-the count rose. It never looks at *which* messages are new.
+(`mailboxCounts`), and emits one `newMail` event with `{ count,
+previousCount }` when the count rose — regardless of how many messages
+arrived in that jump.
 
 ### Design
 
@@ -50,14 +58,14 @@ to also carry `uidNext?: number` and `uidValidity?: bigint`, and add a
 `mailboxCounts`.
 
 On `openActiveMailbox()`, initialize the watermark for a mailbox the first
-time it's opened to `uidNext - 1` (the highest UID that could already exist).
-If the mailbox was already known and `uidValidity` has changed since the
-last open, reset the watermark the same way rather than trusting the old
-value — a `UIDVALIDITY` change means previously-seen UIDs are no longer
-meaningful (rare, but real: e.g. a server-side mailbox rebuild).
+time it's opened to `uidNext - 1` (the highest UID that could already
+exist). If the mailbox was already known and `uidValidity` has changed
+since the last open, reset the watermark the same way rather than trusting
+the old value — a `UIDVALIDITY` change means previously-seen UIDs are no
+longer meaningful (rare, but real: e.g. a server-side mailbox rebuild).
 
 **2. On `handleExists`, when `count > previousCount`, fetch the UIDs of just
-the new range.**
+the new range, with a bounded retry.**
 
 `client.fetch(\`${watermark + 1}:*\`, { uid: true }, { uid: true })` — same
 shape as `mailboxService.ts`'s existing `sinceUid` fetch, scoped to UIDs
@@ -66,9 +74,17 @@ message read, so it should stay as cheap as possible). This requires adding
 a `fetch` method to the `WatcherClient` interface, which today only exposes
 `connect`/`logout`/`mailboxOpen`/`idle`/`on`/`off`.
 
-Sort the returned UIDs ascending, attach them to the event, and advance the
-watermark to the highest UID actually seen — not to `count`-derived math —
-so a partial/failed fetch never silently skips a UID range.
+Retry once on failure (2 attempts total), mirroring
+`webhookDispatcher.ts`'s existing `MAX_ATTEMPTS = 2` convention
+(`src/events/dispatchers/webhookDispatcher.ts:5`) rather than inventing a
+new retry policy. If it still fails, log via the existing `WatcherLogger`
+and emit nothing for this cycle — see point 4 below for why that's the
+right degraded behavior now.
+
+Sort the returned UIDs ascending, emit one event per UID (point 5), and
+advance the watermark to the highest UID actually seen — not to
+`count`-derived math — so a partial/failed fetch never silently skips a UID
+range.
 
 **3. The real risk: this fetch fires *during* an active IDLE, and IDLE and
 FETCH share one connection.**
@@ -80,45 +96,54 @@ re-idle) once that promise resolves. Reading imapflow's own source
 `node_modules/imapflow/lib/imap-flow.js:3709-3721`): any other command run
 on the same connection — including our enrichment `fetch()` — triggers
 `preCheck()`, which sends `DONE` to break IDLE *before* running the new
-command. That `DONE` is what resolves the pending `client.idle()` promise in
-`beginIdle()`.
+command. That `DONE` is what resolves the pending `client.idle()` promise
+in `beginIdle()`.
 
 Concretely: if `handleExists` fires the enrichment `fetch()` without
 coordinating with `beginIdle()`, the `client.idle()` promise in
-`beginIdle()` can resolve (because IDLE broke) essentially concurrently with
-our own `fetch()` still being in flight. For a single-mailbox account this
-is harmless (there's nowhere else for `beginIdle()` to go but back into
-IDLE on the same mailbox). For an account watching **multiple** mailboxes in
-round-robin, `beginIdle()`'s continuation calls `openActiveMailbox()` —
-another command (`SELECT`/`EXAMINE` for the *next* mailbox) — on the same
-connection our enrichment fetch is still using. Both are real, serialized
-IMAP commands (imapflow's per-connection mailbox lock queue prevents actual
-protocol corruption), but the *order* they run in is not something this
-proposal should leave implicit — getting it wrong risks the enrichment
-fetch running against the wrong selected mailbox, or the next mailbox's
-`IDLE` starting later than expected.
+`beginIdle()` can resolve (because IDLE broke) essentially concurrently
+with our own `fetch()` still being in flight. For a single-mailbox account
+this is harmless (there's nowhere else for `beginIdle()` to go but back
+into IDLE on the same mailbox). For an account watching **multiple**
+mailboxes in round-robin, `beginIdle()`'s continuation calls
+`openActiveMailbox()` — another command (`SELECT`/`EXAMINE` for the *next*
+mailbox) — on the same connection our enrichment fetch is still using. Both
+are real, serialized IMAP commands (imapflow's per-connection mailbox lock
+queue prevents actual protocol corruption), but the *order* they run in is
+not something this proposal should leave implicit.
 
-**Mitigation, not just a caveat:** make `handleExists` async and have it
-return the in-flight enrichment promise; have `beginIdle()`'s `.then()`
-continuation explicitly await that promise (tracked as e.g.
-`this.pendingEnrichment`) before calling `openActiveMailbox()`/re-idling.
-This turns an implicit race into an explicit, intentional sequencing point:
-finish enriching the mailbox we just got new mail in before moving on. Note
-this doesn't introduce a fundamentally new gap — there's already a brief
-window with no active IDLE while round-robin switches mailboxes today; this
-extends that existing, already-accepted gap by however long one UID-only
-fetch takes, rather than introducing a new category of risk. A message that
-arrives during that window is still caught by the next `mailboxOpen`'s
-count comparison, same as today.
+**Mitigation:** make `handleExists` async and have it return the in-flight
+enrichment promise; have `beginIdle()`'s `.then()` continuation explicitly
+await that promise (tracked as e.g. `this.pendingEnrichment`) before
+calling `openActiveMailbox()`/re-idling. This turns an implicit race into
+an explicit, intentional sequencing point: finish enriching (and emitting
+for) the mailbox we just got new mail in before moving on. This doesn't
+introduce a fundamentally new gap — there's already a brief window with no
+active IDLE while round-robin switches mailboxes today; this extends that
+existing, already-accepted gap by however long one UID-only fetch (plus its
+possible one retry) takes. A message that arrives during that window is
+still caught by the next `mailboxOpen`'s count comparison, same as today.
 
-**4. Graceful degradation.** If the enrichment fetch throws (transient IMAP
-error, connection drop mid-fetch), log via the existing `WatcherLogger` and
-still emit `newMail` with `count`/`previousCount` as today, just without
-`uids` — never let enrichment failure suppress or crash the core event.
-Consumers that only care about `count`/`previousCount` see no behavior
-change at all.
+This is validated empirically, not just reasoned about from source — see
+"Verification" below.
 
-**5. Event shape.**
+**4. Graceful degradation looks different now that `uid` is mandatory.**
+
+The previous draft of this proposal (batched `count`/`previousCount` event,
+optional `uids`) could always fall back to a data-light, count-only event
+if enrichment failed. Once every event *is* a single message's UID, there's
+no meaningful degraded form of the event itself — an event with no `uid`
+isn't a `newMail` notification. So on a fetch that still fails after its
+retry: log an error, advance nothing, emit nothing for this cycle. The
+watermark stays where it was, so the missed UID range is naturally picked
+up whenever a later `EXISTS` jump triggers a successful fetch — no
+permanent data loss, but notification can be delayed if the mailbox goes
+quiet after a failure. This delayed-catch-up trade-off is the direct,
+accepted cost of moving to a uid-required, per-message event; it's called
+out explicitly rather than left implicit.
+
+**5. Emission model: one event per UID, in ascending order, same `count` on
+each.**
 
 ```ts
 export type NewMailEvent = {
@@ -126,33 +151,56 @@ export type NewMailEvent = {
   accountId: string;
   mailbox: string;
   data: {
+    uid: number;
+    /** Mailbox's total message count as of this EXISTS jump — the one
+     * number IMAP actually told us. The same value is repeated on every
+     * event emitted from a single jump (e.g. 3 messages arriving at once,
+     * taking the mailbox from 5 to 8, all three events carry count: 8).
+     * Deliberately not synthesized into a running per-message total
+     * (6, 7, 8) — IMAP never told us the count grew message-by-message in
+     * that order, only that it jumped by 3 atomically. */
     count: number;
-    previousCount: number;
-    /** UIDs of the newly-arrived messages, ascending. Omitted (not empty)
-     * when the enrichment fetch failed — distinguishes "unknown" from
-     * "zero new messages" (which can't happen; this event only fires when
-     * count > previousCount). Not guaranteed to have exactly
-     * `count - previousCount` entries in every edge case (e.g. a message
-     * that arrived and was expunged again before the fetch ran) — treat
-     * `count`/`previousCount` as authoritative for "how many", `uids` as
-     * best-effort enrichment for "which ones". */
-    uids?: number[];
   };
   timestamp: string;
 };
 ```
 
-Purely additive — `count`/`previousCount` are untouched, so this is a
-non-breaking change for any existing webhook consumer.
+`previousCount` is dropped entirely, per steer. This is a breaking schema
+change — see "Release/versioning" below.
+
+**6. Release/versioning.** This repo's `release-drafter` config already maps
+a `breaking-change` label to a major version bump
+(`.github/release-drafter.yml`). The implementing PR should carry that
+label so the resulting Docker image release reflects this correctly —
+using the mechanism already built for exactly this, not inventing a new
+process.
+
+### Ripple effects (files touched beyond the obvious)
+
+- **`src/telemetry/watcherMetrics.ts`** — `watcherNewMailMessages.add(event.data.count
+  - event.data.previousCount, ...)` no longer compiles once `previousCount`
+  is gone, and no longer needs to: with one event per message, it becomes
+  `.add(1, ...)` per event — simpler, and no longer a derived delta.
+- **`test/watcherMetrics.test.ts`** — update assertions built on the old
+  batched delta.
+- **`test/watcher.test.ts`** — update `previousCount`-based assertions;
+  extend `MockWatcherClient` with a `fetch` method; add the new sequencing/
+  retry/degradation test cases (see Task 1 below).
+- **`test/integration/mailFlow.test.ts`** — its existing webhook assertion
+  (`expect(event.data.count).toBeGreaterThan(event.data.previousCount)`, line
+  ~292) no longer compiles under the new schema; becomes the base for the
+  new real-server scenarios below rather than being deleted outright.
+- **`README.md`** — event table + example payload.
 
 ### Alternatives considered
 
-- **Emit one `newMail` event per new message (singular `uid`), matching
-  `flagsChanged`/`mailRemoved`'s shape.** Rejected: multiplies event/webhook
-  volume for bulk imports (a 200-message backfill becomes 200 webhook POSTs
-  instead of 1), and breaks the existing `count`/`previousCount` batch
-  semantics that current consumers may already depend on. A consumer that
-  wants one-event-per-message can trivially fan the array out itself.
+- **Batched single event with `uids: number[]` plus `count`/`previousCount`**
+  (this proposal's prior draft) — superseded per steer toward one event per
+  message. Would have multiplied nothing (still 1 webhook POST per `EXISTS`
+  jump regardless of burst size) at the cost of every consumer having to
+  unpack an array; the per-message model is simpler for the common
+  single-message-at-a-time case this server mostly sees, at the cost of N
+  webhook POSTs for a genuine bulk import. Accepted per steer.
 - **Derive the new range from sequence numbers (`${previousCount + 1}:*`)
   instead of a tracked UID watermark.** Simpler — no extra state, no
   `uidValidity` handling — but sequence numbers are only valid as of the
@@ -165,9 +213,40 @@ non-breaking change for any existing webhook consumer.
   inconsistently; `\Unseen` would also match older already-reported unread
   mail, not just what's new since the watermark.
 
+### Verification
+
+This repo already has a real IMAP integration suite
+(`test/integration/mailFlow.test.ts`, GreenMail via testcontainers,
+`npm run test:integration`) that drives a real `AccountWatcher` against a
+real IMAP server with real IDLE and a real webhook receiver. That's exactly
+what's needed to validate the IDLE-break/FETCH sequencing risk empirically,
+instead of only trusting a mocked `WatcherClient` or imapflow's source
+comments — extending it, rather than relying on mocked-only coverage, is
+part of Task 1's acceptance criteria, not a follow-up:
+
+1. **Burst of multiple messages in one `EXISTS` jump.** Append 3 messages
+   back-to-back (via a throwaway `ImapFlow` client, same pattern as the
+   existing `appender` in `mailFlow.test.ts`) before the watcher's IDLE
+   cycle has a chance to notice them individually. Assert exactly 3
+   `newMail` webhook events arrive, each with a real, distinct, correct
+   `uid` (cross-checked against a direct `list_messages` call) and the same
+   correct `count`.
+2. **Multi-mailbox round-robin sequencing.** A dedicated scenario using
+   `watchMailboxes: ['INBOX', 'Archive']`: append a message to INBOX, then
+   immediately append a message to Archive while INBOX's enrichment fetch
+   is plausibly still in flight. Assert both mailboxes' events arrive with
+   correct `mailbox`/`uid` attribution and that no event's mailbox/uid
+   pairing is scrambled — this is the actual empirical test of the
+   sequencing fix in point 3 above, something a mock can't prove.
+3. **Retry/degradation** stays a mocked-`WatcherClient` unit test (forcing a
+   transient then-successful fetch, and a persistently-failing fetch) —
+   GreenMail has no supported way to inject a transient `FETCH` failure on
+   demand, so this part of the design is verified at the unit level, not
+   the integration level.
+
 ### Task Breakdown
 
-#### Task 1 — Watcher UID enrichment
+#### Task 1 — Watcher UID enrichment + per-message emission
 **Status:** Not started
 **Description:**
 - Widen `MailboxOpenResult`/`WatcherClient` (`src/imap/watcher.ts`) to
@@ -175,55 +254,46 @@ non-breaking change for any existing webhook consumer.
   method to `WatcherClient` for the UID-only enrichment query.
 - Add `mailboxUidWatermarks`/`mailboxUidValidity` maps; initialize/reset per
   the `uidValidity`-change rule above.
-- Make `handleExists` async; perform the enrichment fetch and attach
-  `data.uids`; make `beginIdle()`'s continuation await it before
-  round-robining to the next mailbox (the sequencing fix described above).
-- Add `uids?: number[]` to `NewMailEvent` in `src/events/types.ts`.
-- Update `README.md`'s event table/example payload and the "Known
-  limitation" area if relevant.
-- Extend `MockWatcherClient` in `test/watcher.test.ts` with a `fetch`
-  method.
+- Make `handleExists` async; perform the enrichment fetch (2 attempts) and,
+  on success, emit one `newMail` event per UID (ascending); make
+  `beginIdle()`'s continuation await the in-flight enrichment before
+  round-robining to the next mailbox (the sequencing fix above).
+- Replace `NewMailEvent`'s `{ count, previousCount }` with `{ uid, count }`
+  in `src/events/types.ts`.
+- Update `src/telemetry/watcherMetrics.ts`'s `watcherNewMailMessages` to
+  `.add(1, ...)` per event.
+- Update `README.md`'s event table/example payload.
+- Update `test/watcher.test.ts`, `test/watcherMetrics.test.ts` for the new
+  schema; extend `MockWatcherClient` with `fetch`.
+- Extend `test/integration/mailFlow.test.ts` with the two GreenMail
+  scenarios described above (burst + multi-mailbox sequencing), replacing
+  its now-invalid `previousCount` assertion.
+- Open the implementing PR with the `breaking-change` label.
 
 **Acceptance criteria:**
-- Unit tests (mocked `WatcherClient`, no live IMAP server — see "Open
-  questions" below on what this does and doesn't prove): a single new
-  message produces `data.uids` with exactly that UID; several messages
-  arriving in one `EXISTS` jump produce all their UIDs, ascending; a
-  simulated enrichment-fetch failure still emits `newMail` with `count`/
-  `previousCount` and no `uids`, plus a logged warning, and does not throw
-  out of the watcher; a `uidValidity` change between two opens of the same
-  mailbox resets the watermark instead of computing a bogus range; for a
-  multi-mailbox account, `openActiveMailbox()` for mailbox B is not called
-  until mailbox A's in-flight enrichment fetch has settled (this is the
-  test that actually exercises the sequencing fix, not just the happy
-  path).
-- `npm run lint`, `npx tsc -p tsconfig.json --noEmit`, `npm test` all green.
-- Existing `newMail`-related tests (count/previousCount behavior,
-  reconnect/round-robin tests) pass unmodified in their assertions about
-  `count`/`previousCount` — only new assertions are added.
+- Unit tests (mocked `WatcherClient`): several messages arriving in one
+  `EXISTS` jump produce one event per UID, ascending, each with the correct
+  (same) `count`; a transient enrichment-fetch failure that succeeds on
+  retry still emits correctly; a persistently-failing fetch emits nothing
+  for that cycle, logs a warning, and leaves the watermark unadvanced so a
+  later successful fetch picks up the missed range; a `uidValidity` change
+  between two opens of the same mailbox resets the watermark instead of
+  computing a bogus range; for a multi-mailbox account, `openActiveMailbox()`
+  for mailbox B is not called until mailbox A's in-flight enrichment fetch
+  has settled.
+- Integration tests (GreenMail, real server): both new scenarios in
+  "Verification" above pass against a real IMAP server with real IDLE.
+- `npm run lint`, `npx tsc -p tsconfig.json --noEmit`, `npm test`,
+  `npm run test:integration` all green.
 
-### Open questions
+### Resolved decisions
 
-1. **This can only be verified against a mock in this sandbox.** The
-   IDLE-break-then-FETCH ordering described above is a real behavior of the
-   `imapflow` library talking to a real IMAP server; a mocked
-   `WatcherClient` can assert *this codebase's* sequencing (that we await
-   enrichment before round-robining) but can't prove imapflow itself
-   behaves the way its source suggests once TLS/network timing is real. As
-   with the Docker build check added earlier, recommend a manual smoke test
-   against a real (or a real open-source IMAP test server, e.g. Dovecot in
-   CI) mailbox with `watchMailboxes` set to two or more folders before
-   trusting this in production — happy to add that as CI coverage similar
-   to the `docker-build` job if that's wanted, but flagging it as a
-   follow-up rather than folding it into Task 1 by default.
-2. **Is a single task the right size, or should the sequencing fix
-   (Task 1, point 3 above) be split out from the UID-fetch itself?** They're
-   tightly coupled — the fetch isn't safe to add without the sequencing fix
-   — so this proposal defaults to one task/one PR, but flagging in case a
-   smaller reviewable diff is preferred.
-3. **Any interest in also capping how many UIDs get inlined into one event**
-   (e.g. a mailbox that receives a 5,000-message bulk import in one
-   `EXISTS` jump)? Current proposal has no cap — `uids` grows with however
-   many messages arrived. Could add a cap (e.g. first N, with `count` still
-   reflecting the true total) if unbounded array size in a webhook payload
-   is a concern.
+1. **One `newMail` event per new message**, not one batched event per
+   `EXISTS` jump — breaking change, `previousCount` dropped, `count` kept
+   (mailbox total as observed in that `EXISTS` jump, repeated across every
+   event from the same jump — never synthesized into a fake running total).
+2. **Single task, single PR** for the whole change.
+3. **No cap on burst size** — out of scope for this pass, raised and
+   explicitly dropped.
+4. **Verified for real against the existing GreenMail integration suite**,
+   not just mocks — closing the prior draft's biggest open gap.
