@@ -263,9 +263,15 @@ events share this envelope:
 
 | `event`        | Trigger                          | `data` fields                                            |
 | -------------- | -------------------------------- | -------------------------------------------------------- |
-| `newMail`      | Message count in the mailbox rose | `count` (new total), `previousCount` (prior total).      |
+| `newMail`      | A new message arrived in the mailbox — fires once per message | `uid` (the new message's UID), `count` (mailbox's total message count as of this event; the same value across every event from one burst of simultaneous arrivals, not a per-message running total). |
 | `flagsChanged` | A message's flags were updated    | `uid`, `flags` (string[] of the message's current flags).|
 | `mailRemoved`  | A message was expunged/removed    | `uid` (if available), `seq` (sequence number).           |
+
+`newMail` requires a follow-up IMAP fetch to resolve the new UID(s); if that
+fetch fails (after one retry), the event is skipped for that cycle rather
+than emitted without a `uid` — it's picked up on the next successful fetch
+instead, so no message is silently missed, but notification can be delayed
+if the mailbox goes quiet right after a transient failure.
 
 ### Known limitation: "moved mail" detection
 

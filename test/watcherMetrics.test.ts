@@ -16,11 +16,19 @@ const ACCOUNT: AccountConfig = {
 };
 
 type MockWatcherOverrides = Partial<{
-  mailboxOpen: (path: string) => Promise<{ exists?: number }>;
+  mailboxOpen: (
+    path: string
+  ) => Promise<{ exists?: number; uidNext?: number; uidValidity?: bigint }>;
+  fetchAll: (
+    range: string,
+    query: { uid: true },
+    options: { uid: true }
+  ) => Promise<Array<{ uid: number }>>;
 }>;
 
 const buildWatcherCtor = (overrides: MockWatcherOverrides = {}) => {
   const mailboxOpen = vi.fn(overrides.mailboxOpen ?? (() => Promise.resolve({ exists: 0 })));
+  const fetchAll = vi.fn(overrides.fetchAll ?? (() => Promise.resolve([])));
   const instances: MockWatcherClient[] = [];
 
   class MockWatcherClient extends EventEmitter {
@@ -28,6 +36,7 @@ const buildWatcherCtor = (overrides: MockWatcherOverrides = {}) => {
     logout = vi.fn(() => Promise.resolve());
     mailboxOpen = mailboxOpen;
     idle = vi.fn(() => new Promise<void>(() => undefined));
+    fetchAll = fetchAll;
 
     constructor() {
       super();
@@ -82,17 +91,28 @@ describe('watcherMetrics', () => {
     return (metric?.dataPoints ?? []) as GaugePoint[];
   };
 
-  it('counts a newMail event and the new-message delta', async () => {
+  it('counts a newMail event per message', async () => {
     const { AccountWatcherCtor, observeWatcherMetrics } = await loadModules();
     const { ctor, instances } = buildWatcherCtor({
-      mailboxOpen: () => Promise.resolve({ exists: 2 })
+      mailboxOpen: () => Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n }),
+      fetchAll: () => Promise.resolve([{ uid: 3 }, { uid: 4 }, { uid: 5 }])
     });
     const watcher = new AccountWatcherCtor(ACCOUNT, { WatcherClientCtor: ctor });
+    const newMailEvents: unknown[] = [];
+    watcher.on('newMail', (event) => newMailEvents.push(event));
     observeWatcherMetrics(watcher, ACCOUNT);
 
     await watcher.start();
     instances[0]?.emit('exists', 5);
 
+    await vi.waitFor(() => {
+      if (newMailEvents.length < 3) {
+        throw new Error('waiting for newMail events');
+      }
+    });
+
+    // 3 events (one per UID), each recorded as its own watcher.events count
+    // and its own +1 in new_mail.messages -- no delta math anymore.
     const events = await sumPoints('mailtool.watcher.events');
     expect(events).toHaveLength(1);
     expect(events[0]!.attributes).toMatchObject({
@@ -100,11 +120,11 @@ describe('watcherMetrics', () => {
       mailbox: 'INBOX',
       event: 'newMail'
     });
-    expect(events[0]!.value).toBe(1);
+    expect(events[0]!.value).toBe(3);
 
     const newMailMessages = await sumPoints('mailtool.watcher.new_mail.messages');
     expect(newMailMessages[0]!.attributes).toMatchObject({ 'account.id': 'acc-1', mailbox: 'INBOX' });
-    expect(newMailMessages[0]!.value).toBe(3); // 5 - 2
+    expect(newMailMessages[0]!.value).toBe(3);
 
     await watcher.stop();
   });

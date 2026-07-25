@@ -49,7 +49,9 @@ export const observeWatcherMetrics = (watcher: AccountWatcher, account: AccountC
       mailbox: event.mailbox,
       event: 'newMail'
     });
-    telemetry.watcherNewMailMessages.add(event.data.count - event.data.previousCount, {
+    // One newMail event is already exactly one message, so this is a plain
+    // +1 rather than a derived delta.
+    telemetry.watcherNewMailMessages.add(1, {
       'account.id': event.accountId,
       mailbox: event.mailbox
     });
