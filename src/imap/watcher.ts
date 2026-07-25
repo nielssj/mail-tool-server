@@ -431,8 +431,20 @@ export class AccountWatcher extends EventEmitter {
       return;
     }
 
-    const uids = await this.fetchNewUids(client, watermark);
-    if (uids == null || uids.length === 0) {
+    const fetched = await this.fetchNewUids(client, watermark);
+    if (fetched == null) {
+      return;
+    }
+
+    // Defensive re-filter, not just trust: RFC 3501 leaves a "N:*" range
+    // where N exceeds the highest existing UID ambiguous, and at least one
+    // real server (found via the GreenMail-backed integration suite, not a
+    // mock) interprets it as matching the last message instead of nothing
+    // -- silently re-returning an already-reported UID rather than an empty
+    // result. Never trust a fetch result to only contain genuinely-new
+    // UIDs; always filter against the watermark ourselves.
+    const uids = fetched.filter((uid) => uid > watermark);
+    if (uids.length === 0) {
       return;
     }
 

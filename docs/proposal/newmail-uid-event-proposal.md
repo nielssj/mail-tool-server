@@ -324,22 +324,30 @@ part of Task 1's acceptance criteria, not a follow-up:
 - **Local verification: full green.** `npm run lint`, `npx tsc -p
   tsconfig.json --noEmit`, and `npm test` (198 tests across 33 files,
   including the new watcher/watcherMetrics/dispatcher cases) all pass.
-- **`npm run test:integration` could not be executed in this sandbox** —
-  confirmed via `docker info` failing outright, and via
-  `testcontainers`'s own error ("Could not find a working container
-  runtime strategy") when actually running the suite. This is the same
-  sandbox limitation encountered during the earlier Docker-image work, not
-  something new to this task. The two new GreenMail scenarios (burst UIDs,
-  multi-mailbox round-robin attribution) and the updated existing scenario
-  are written and type-check/lint cleanly, and the test file loads and
-  reaches real container startup before failing — but their actual
-  real-server behavior is **unverified pending a real run**. This repo's
-  CI already runs `npm run test:integration` as the `integration` job on
-  GitHub-hosted runners (real Docker) — that CI run against this PR is the
-  real verification step for this part of the acceptance criteria, the
-  same pattern as the `docker-build` CI job served for the earlier Docker
-  work. Recommend checking that job's actual result before treating Task 1
-  as fully verified, not just merged.
+- **`npm run test:integration` could not be executed in this sandbox**
+  (confirmed via `docker info` failing outright, and via
+  `testcontainers`'s own "Could not find a working container runtime
+  strategy" error) — the same sandbox limitation as the earlier Docker
+  work. The two new scenarios were pushed and verified for real against
+  the `integration` CI job (GitHub-hosted runner, real Docker), which is
+  exactly why this mattered: **the first CI run caught a real bug the
+  mocked unit tests could not have caught.** The burst scenario (3
+  messages appended back-to-back) produced 4 `newMail` events instead of
+  3, against a real GreenMail server. Root cause: RFC 3501 leaves a
+  `FETCH` range like `N:*` ambiguous when `N` exceeds the highest existing
+  UID, and GreenMail apparently interprets it as matching the last
+  message rather than returning nothing — so a later enrichment fetch in
+  the chain (whose "true" range should have been empty) silently
+  re-returned an already-reported UID as if it were new. Fixed by never
+  trusting a fetch result to only contain genuinely-new UIDs: `emitNewMail`
+  now re-filters the fetched UIDs against the watermark itself
+  (`fetched.filter((uid) => uid > watermark)`) before emitting or
+  advancing, regardless of what the server's range semantics actually did.
+  Added a corresponding unit test (mocked `fetchAll` deliberately
+  re-returning an already-seen UID) so this doesn't need a live server to
+  stay covered going forward, and re-pushed for a second real CI run to
+  confirm the fix (see the PR's CI history for the actual result rather
+  than trusting this doc alone).
 
 ### Resolved decisions
 

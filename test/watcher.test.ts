@@ -161,6 +161,50 @@ describe('AccountWatcher', () => {
     await watcher.stop();
   });
 
+  it('never re-emits a UID already covered by the watermark, even if the server returns one', async () => {
+    // Found via the real GreenMail-backed integration suite, not a mock:
+    // at least one real IMAP server interprets a "N:*" fetch range where N
+    // exceeds the highest existing UID as matching the last message
+    // instead of an empty result (RFC 3501 leaves this ambiguous). This
+    // simulates that by having fetchAll return an already-seen UID
+    // alongside a genuinely new one.
+    const { ctor, instances, fetchAll } = buildWatcherCtor({
+      mailboxOpen: () =>
+        Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n }),
+      fetchAll: () => Promise.resolve([{ uid: 3 }])
+    });
+    const watcher = new AccountWatcher(ACCOUNT, { WatcherClientCtor: ctor });
+    const events: unknown[] = [];
+    watcher.on('newMail', (event) => events.push(event));
+
+    await watcher.start();
+    instances[0]?.emit('exists', 3);
+
+    await vi.waitFor(() => {
+      if (events.length < 1) {
+        throw new Error('waiting for first newMail event');
+      }
+    });
+
+    expect(events).toHaveLength(1);
+
+    // Second jump: the server incorrectly re-returns uid 3 (already
+    // reported and watermarked) instead of just the genuinely new uid 4.
+    fetchAll.mockImplementation(() => Promise.resolve([{ uid: 3 }, { uid: 4 }]));
+    instances[0]?.emit('exists', 4);
+
+    await vi.waitFor(() => {
+      if (events.length < 2) {
+        throw new Error('waiting for second newMail event');
+      }
+    });
+
+    expect(events).toHaveLength(2);
+    expect((events[1] as { data: { uid: number } }).data.uid).toBe(4);
+
+    await watcher.stop();
+  });
+
   it('skips the cycle and logs when enrichment keeps failing, leaving the watermark unadvanced', async () => {
     const fetchAll = vi.fn(
       () => Promise.reject(new Error('down')) as Promise<Array<{ uid: number }>>
