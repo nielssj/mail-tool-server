@@ -345,9 +345,10 @@ part of Task 1's acceptance criteria, not a follow-up:
   advancing, regardless of what the server's range semantics actually did.
   Added a corresponding unit test (mocked `fetchAll` deliberately
   re-returning an already-seen UID) so this doesn't need a live server to
-  stay covered going forward, and re-pushed for a second real CI run to
-  confirm the fix (see the PR's CI history for the actual result rather
-  than trusting this doc alone).
+  stay covered going forward. Re-pushed and confirmed on a second CI run
+  (run 30155728589): all three `integration` scenarios (existing flow,
+  burst, multi-mailbox round-robin) now pass against the real GreenMail
+  server, alongside green `checks`/`docker-build`.
 
 ### Resolved decisions
 
