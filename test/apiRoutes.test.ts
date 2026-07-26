@@ -31,8 +31,31 @@ const makeFetchMessage = (uid: number): FetchMessageObject => ({
   size: 100
 });
 
+// Deliberately populates every ImapFlow-native field formatMessageDetails
+// is documented to exclude, plus a populated (non-empty) flags Set -- so
+// the happy-path test below can prove they never reach the wire, rather
+// than merely proving they're absent because the fixture never had them.
 const makeMessageDetail = (uid: number): MessageDetail => ({
-  ...makeFetchMessage(uid),
+  seq: uid,
+  uid,
+  flags: new Set(['\\Seen', '\\Flagged']),
+  envelope: {
+    subject: `Subject ${uid}`,
+    from: [{ name: 'Jane Doe', address: 'jane@example.com' }],
+    date: new Date('2024-01-01T00:00:00.000Z')
+  },
+  internalDate: new Date('2024-01-02T00:00:00.000Z'),
+  size: 100,
+  source: Buffer.from('raw message bytes'),
+  bodyStructure: { part: '1', type: 'text/plain', size: 12 },
+  modseq: BigInt(1),
+  emailId: 'email-id-1',
+  threadId: 'thread-id-1',
+  labels: new Set(['\\Important']),
+  flagColor: 'yellow',
+  bodyParts: new Map([['1', Buffer.from('Body bytes')]]),
+  headers: Buffer.from('Subject: x\r\n'),
+  id: 'account-scoped-id',
   body: `Body ${uid}`,
   attachments: []
 });
@@ -153,17 +176,46 @@ describe('API routes', () => {
   });
 
   describe('GET /accounts/:accountId/mailboxes/:mailbox/messages/:uid', () => {
-    it('returns a message on happy path', async () => {
+    it('returns the clean projection, excluding every ImapFlow-native leak field', async () => {
       const response = await app.inject({
         method: 'GET',
         url: '/accounts/acc-1/mailboxes/INBOX/messages/1'
       });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual(
-        expect.objectContaining({
-          uid: 1
-        })
-      );
+      const body = response.json();
+
+      expect(body).toEqual({
+        uid: 1,
+        subject: 'Subject 1',
+        from: 'Jane Doe <jane@example.com>',
+        date: '2024-01-01T00:00:00.000Z',
+        flags: ['\\Seen', '\\Flagged'],
+        body: 'Body 1',
+        attachments: []
+      });
+
+      // Belt-and-suspenders: even if a future change accidentally spread
+      // extra fields onto the handler's return value, the Fastify response
+      // schema (additionalProperties: false) would strip them at
+      // serialization time -- assert directly against the raw fixture's
+      // leak-prone field names to prove neither path lets them through.
+      for (const leaked of [
+        'source',
+        'bodyStructure',
+        'seq',
+        'modseq',
+        'emailId',
+        'threadId',
+        'labels',
+        'flagColor',
+        'bodyParts',
+        'headers',
+        'id',
+        'internalDate',
+        'size'
+      ]) {
+        expect(body).not.toHaveProperty(leaked);
+      }
     });
 
     it('returns 404 when message is missing', async () => {

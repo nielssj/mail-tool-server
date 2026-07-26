@@ -34,7 +34,7 @@ const cleanSnippet = (raw: string): string =>
     .trim()
     .slice(0, SNIPPET_MAX_CHARS);
 
-const formatEnvelope = (message: FetchMessageObject): EnvelopeSummary => ({
+export const formatEnvelope = (message: FetchMessageObject): EnvelopeSummary => ({
   uid: message.uid,
   subject: message.envelope?.subject,
   from: formatFrom(message),
@@ -72,3 +72,45 @@ export const formatMessageBody = (
     attachments: message.attachments
   };
 };
+
+export type MessageDetails = EnvelopeSummary & {
+  body: string;
+  attachments: MessageAttachment[];
+};
+
+/**
+ * Full projection of a MessageDetail for the plain HTTP API. Unlike
+ * formatMessageBody (capped for MCP/agent-context use), this exposes the
+ * complete decoded body -- an HTTP caller isn't paying for tokens, and
+ * export_message-style truncation has no equivalent here.
+ *
+ * Explicitly picks only uid/subject/from/date/flags/body/attachments.
+ * Every other field ImapFlow's FetchMessageObject may carry on a
+ * MessageDetail is deliberately left off the response:
+ *  - source: the raw message buffer -- large, redundant with the
+ *    dedicated raw-export path (get_raw_source/getRawSource), and not
+ *    JSON-friendly (serializes as a numbered-object byte array).
+ *  - bodyStructure: ImapFlow's internal MIME tree, used to derive `body`/
+ *    `attachments` above -- an implementation detail, not a stable
+ *    contract worth exposing.
+ *  - seq: the IMAP sequence number, connection/session-scoped and not a
+ *    stable identifier -- uid already is.
+ *  - internalDate: server-received timestamp, distinct from `date` (the
+ *    envelope's Date: header) -- not requested, and easy to confuse with
+ *    `date` if both were exposed.
+ *  - size: byte size of the raw message, not requested.
+ *  - modseq: a bigint (CONDSTORE-only) -- would throw serializing to JSON
+ *    if ever populated.
+ *  - emailId / threadId / labels: Gmail/X-GM-EXT-1-extension-only fields,
+ *    not populated by most servers and not part of this API's contract.
+ *  - flagColor: cosmetic, derived from flags, ImapFlow-specific.
+ *  - bodyParts / headers: raw Buffers used internally to build `body`,
+ *    same non-JSON-friendly problem as `source`.
+ *  - id: an account-scoped opaque token, not documented as broadly
+ *    supported across providers.
+ */
+export const formatMessageDetails = (message: MessageDetail): MessageDetails => ({
+  ...formatEnvelope(message),
+  body: message.body,
+  attachments: message.attachments
+});

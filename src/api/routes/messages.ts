@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { MailboxService } from '../../services/mailboxService.js';
+import { formatMessageDetails } from '../../mcp/format.js';
 import { NotFoundError } from './shared.js';
 
 type ListMessagesRoute = {
@@ -69,7 +70,39 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
         }
       },
       response: {
-        200: { type: 'object', additionalProperties: true }
+        // Explicit properties + additionalProperties: false so the
+        // exclusions in formatMessageDetails (see mcp/format.ts) are
+        // enforced by Fastify's response serializer too, not just by
+        // what the handler happens to return -- a future accidental
+        // `...message` spread here would be stripped at the wire, not
+        // silently leaked.
+        200: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['uid', 'flags', 'body', 'attachments'],
+          properties: {
+            uid: { type: 'integer' },
+            subject: { type: 'string' },
+            from: { type: 'string' },
+            date: { type: 'string' },
+            flags: { type: 'array', items: { type: 'string' } },
+            body: { type: 'string' },
+            attachments: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['partId', 'mimeType'],
+                properties: {
+                  partId: { type: 'string' },
+                  filename: { type: 'string' },
+                  mimeType: { type: 'string' },
+                  sizeBytes: { type: 'integer' }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }, async (request) => {
@@ -81,6 +114,6 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
     if (!message) {
       throw new NotFoundError('Message not found');
     }
-    return message;
+    return formatMessageDetails(message);
   });
 };
