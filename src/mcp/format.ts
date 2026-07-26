@@ -56,6 +56,26 @@ export const formatMessageSummary = (
   snippet: cleanSnippet(message.bodyParts?.get('1')?.toString('utf8') ?? '')
 });
 
+export type MessageListItem = {
+  uid: number;
+  subject?: string;
+  from?: string;
+  date?: string;
+};
+
+/**
+ * Minimal projection for the plain HTTP list endpoint -- deliberately
+ * lighter than even MCP's own MessageSummary. A list response fans out
+ * over every message in the mailbox, so per-item content (flags, a body
+ * snippet, attachment metadata) is left off entirely rather than repeated
+ * N times; get_message/GET .../messages/:uid is the place for a specific
+ * message's full detail (see MessageDetails above).
+ */
+export const formatMessageListItem = (message: FetchMessageObject): MessageListItem => {
+  const { uid, subject, from, date } = formatEnvelope(message);
+  return { uid, subject, from, date };
+};
+
 /**
  * Bounds `get_message`'s body to `capChars` (default 8000), signalling
  * truncation so the caller can point the agent at `export_message`.

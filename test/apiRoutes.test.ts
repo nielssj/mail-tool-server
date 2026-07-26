@@ -20,15 +20,21 @@ const makeListResponse = (path: string): ListResponse => ({
   subscribed: false
 });
 
-const makeFetchMessage = (uid: number): FetchMessageObject => ({
+// Populates flags and bodyParts (the list route's fetch query includes a
+// snippet source) so the list happy-path test can prove they're excluded
+// from the response, not merely absent from the fixture.
+const makeFetchMessage = (uid: number): FetchMessageObject & { bodyParts?: Map<string, Buffer> } => ({
   seq: uid,
   uid,
-  flags: new Set(),
+  flags: new Set(['\\Seen']),
   envelope: {
-    subject: `Subject ${uid}`
+    subject: `Subject ${uid}`,
+    from: [{ name: 'Jane Doe', address: 'jane@example.com' }],
+    date: new Date('2024-01-01T00:00:00.000Z')
   },
   internalDate: new Date('2024-01-01T00:00:00.000Z'),
-  size: 100
+  size: 100,
+  bodyParts: new Map([['1', Buffer.from('Body bytes')]])
 });
 
 // Deliberately populates every ImapFlow-native field formatMessageDetails
@@ -138,21 +144,36 @@ describe('API routes', () => {
   });
 
   describe('GET /accounts/:accountId/mailboxes/:mailbox/messages', () => {
-    it('returns message list on happy path', async () => {
+    it('returns the minimal per-message projection, excluding flags/body/attachments', async () => {
       const response = await app.inject({
         method: 'GET',
         url: '/accounts/acc-1/mailboxes/INBOX/messages?limit=10&sinceUid=2'
       });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual([
-        expect.objectContaining({
-          uid: 1
-        })
+        {
+          uid: 1,
+          subject: 'Subject 1',
+          from: 'Jane Doe <jane@example.com>',
+          date: '2024-01-01T00:00:00.000Z'
+        }
       ]);
       expect(mailboxService.listMessages).toHaveBeenCalledWith('acc-1', 'INBOX', {
         limit: 10,
         sinceUid: 2
       });
+    });
+
+    it('never includes flags, body, or attachments for listed messages', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/accounts/acc-1/mailboxes/INBOX/messages'
+      });
+      expect(response.statusCode).toBe(200);
+      const [message] = response.json();
+      for (const excluded of ['flags', 'body', 'attachments', 'bodyParts', 'seq', 'internalDate', 'size']) {
+        expect(message).not.toHaveProperty(excluded);
+      }
     });
 
     it('returns 404 for unknown mailbox', async () => {

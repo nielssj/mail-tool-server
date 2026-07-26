@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { formatMessageDetails } from '../src/mcp/format.js';
+import { formatMessageDetails, formatMessageListItem } from '../src/mcp/format.js';
 import type { MessageDetail } from '../src/services/mailboxService.js';
+import type { FetchMessageObject } from 'imapflow';
 
 const makeMessageDetail = (): MessageDetail => ({
   seq: 1,
@@ -87,6 +88,48 @@ describe('formatMessageDetails', () => {
       flags: [],
       body: '',
       attachments: []
+    });
+  });
+});
+
+const makeListFetchMessage = (): FetchMessageObject & { bodyParts?: Map<string, Buffer> } => ({
+  seq: 1,
+  uid: 42,
+  flags: new Set(['\\Seen', '\\Flagged']),
+  envelope: {
+    subject: 'Hello',
+    from: [{ name: 'Jane Doe', address: 'jane@example.com' }],
+    date: new Date('2024-01-01T00:00:00.000Z')
+  },
+  internalDate: new Date('2024-01-02T00:00:00.000Z'),
+  size: 100,
+  bodyParts: new Map([['1', Buffer.from('Body bytes')]])
+});
+
+describe('formatMessageListItem', () => {
+  it('picks only uid/subject/from/date -- no flags, body, or attachments', () => {
+    const result = formatMessageListItem(makeListFetchMessage());
+
+    expect(result).toEqual({
+      uid: 42,
+      subject: 'Hello',
+      from: 'Jane Doe <jane@example.com>',
+      date: '2024-01-01T00:00:00.000Z'
+    });
+    expect(result).not.toHaveProperty('flags');
+    expect(result).not.toHaveProperty('body');
+    expect(result).not.toHaveProperty('attachments');
+    expect(result).not.toHaveProperty('bodyParts');
+  });
+
+  it('handles a message with no envelope gracefully', () => {
+    const result = formatMessageListItem({ seq: 1, uid: 7 });
+
+    expect(result).toEqual({
+      uid: 7,
+      subject: undefined,
+      from: undefined,
+      date: undefined
     });
   });
 });

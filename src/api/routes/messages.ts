@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { MailboxService } from '../../services/mailboxService.js';
-import { formatMessageDetails } from '../../mcp/format.js';
+import { formatMessageDetails, formatMessageListItem } from '../../mcp/format.js';
 import { NotFoundError } from './shared.js';
 
 type ListMessagesRoute = {
@@ -44,18 +44,35 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
         }
       },
       response: {
+        // Explicit properties + additionalProperties: false, same
+        // reasoning as the single-message route below: enforced at the
+        // wire, not just by what the handler returns. Deliberately
+        // minimal -- no flags/body/attachments here at all, since this
+        // fans out per message in the mailbox; get_message/GET
+        // .../messages/:uid is where full per-message detail lives.
         200: {
           type: 'array',
-          items: { type: 'object', additionalProperties: true }
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['uid'],
+            properties: {
+              uid: { type: 'integer' },
+              subject: { type: 'string' },
+              from: { type: 'string' },
+              date: { type: 'string' }
+            }
+          }
         }
       }
     }
   }, async (request) => {
-    return mailboxService.listMessages(
+    const messages = await mailboxService.listMessages(
       request.params.accountId,
       request.params.mailbox,
       request.query
     );
+    return messages.map(formatMessageListItem);
   });
 
   app.get<GetMessageRoute>('/accounts/:accountId/mailboxes/:mailbox/messages/:uid', {
