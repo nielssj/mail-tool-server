@@ -253,19 +253,29 @@ describe('integration: real IMAP flow against GreenMail', () => {
       expect(listRes.statusCode).toBe(200);
       const messages = listRes.json() as Array<{
         uid: number;
-        envelope: { subject: string };
+        subject?: string;
       }>;
       expect(messages.length).toBe(1);
       const uid = messages[0]!.uid;
-      expect(messages[0]!.envelope.subject).toBe('First message');
+      expect(messages[0]!.subject).toBe('First message');
+      // List items are deliberately minimal -- no flags/body/attachments.
+      expect(messages[0]).not.toHaveProperty('flags');
+      expect(messages[0]).not.toHaveProperty('body');
 
-      // 3. Get the single message by uid.
+      // 3. Get the single message by uid -- the clean detail projection,
+      // with a real decoded body and no ImapFlow-native fields (source,
+      // bodyStructure, ...) leaking onto the wire.
       const getRes = await app.inject({
         method: 'GET',
         url: `/accounts/${account.id}/mailboxes/INBOX/messages/${uid}`
       });
       expect(getRes.statusCode).toBe(200);
-      expect((getRes.json() as { uid: number }).uid).toBe(uid);
+      const detail = getRes.json() as { uid: number; subject?: string; body: string };
+      expect(detail.uid).toBe(uid);
+      expect(detail.subject).toBe('First message');
+      expect(detail.body).toContain('hello world');
+      expect(detail).not.toHaveProperty('source');
+      expect(detail).not.toHaveProperty('bodyStructure');
 
       // 4. Flag the message.
       const flagRes = await app.inject({
