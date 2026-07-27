@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { MailboxService } from '../../services/mailboxService.js';
+import { formatMessageDetails, formatMessageListItem } from '../../mcp/format.js';
 import { NotFoundError } from './shared.js';
 
 type ListMessagesRoute = {
@@ -43,18 +44,35 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
         }
       },
       response: {
+        // Explicit properties + additionalProperties: false, same
+        // reasoning as the single-message route below: enforced at the
+        // wire, not just by what the handler returns. Deliberately
+        // minimal -- no flags/body/attachments here at all, since this
+        // fans out per message in the mailbox; get_message/GET
+        // .../messages/:uid is where full per-message detail lives.
         200: {
           type: 'array',
-          items: { type: 'object', additionalProperties: true }
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['uid'],
+            properties: {
+              uid: { type: 'integer' },
+              subject: { type: 'string' },
+              from: { type: 'string' },
+              date: { type: 'string' }
+            }
+          }
         }
       }
     }
   }, async (request) => {
-    return mailboxService.listMessages(
+    const messages = await mailboxService.listMessages(
       request.params.accountId,
       request.params.mailbox,
       request.query
     );
+    return messages.map(formatMessageListItem);
   });
 
   app.get<GetMessageRoute>('/accounts/:accountId/mailboxes/:mailbox/messages/:uid', {
@@ -69,7 +87,39 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
         }
       },
       response: {
-        200: { type: 'object', additionalProperties: true }
+        // Explicit properties + additionalProperties: false so the
+        // exclusions in formatMessageDetails (see mcp/format.ts) are
+        // enforced by Fastify's response serializer too, not just by
+        // what the handler happens to return -- a future accidental
+        // `...message` spread here would be stripped at the wire, not
+        // silently leaked.
+        200: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['uid', 'flags', 'body', 'attachments'],
+          properties: {
+            uid: { type: 'integer' },
+            subject: { type: 'string' },
+            from: { type: 'string' },
+            date: { type: 'string' },
+            flags: { type: 'array', items: { type: 'string' } },
+            body: { type: 'string' },
+            attachments: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['partId', 'mimeType'],
+                properties: {
+                  partId: { type: 'string' },
+                  filename: { type: 'string' },
+                  mimeType: { type: 'string' },
+                  sizeBytes: { type: 'integer' }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }, async (request) => {
@@ -81,6 +131,6 @@ export const registerMessageRoutes = <TApp extends FastifyInstance<any, any, any
     if (!message) {
       throw new NotFoundError('Message not found');
     }
-    return message;
+    return formatMessageDetails(message);
   });
 };
