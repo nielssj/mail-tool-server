@@ -555,6 +555,13 @@ know exactly what to expect from a scrape without reading source.
    `@opentelemetry/api`; no dev-mode console/Prometheus exporter is added.
    Collection setup (including for local dev, if ever wanted) is entirely a
    separate, later concern.
+   *Revisited later*: an opt-in, deploy-time-only `src/otel-bootstrap.ts` +
+   `@opentelemetry/exporter-prometheus` was added (not wired into `npm
+   start`/dev/tests, only into the Docker image's `CMD`) — see
+   [`docs/metrics.md`](../metrics.md#collection-an-opt-in-bootstrap-not-on-by-default).
+   Decision 1 (`@opentelemetry/api` as the only prod dependency for
+   application code itself) still holds; this just adds the collection
+   piece the container image now carries.
 4. **Histogram bucket boundaries** — left at OTel SDK defaults for v1;
    `instruments.ts` carries a comment flagging recalibration once real
    traffic/attachment-size data exists.

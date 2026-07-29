@@ -6,42 +6,45 @@ emit — names, types, units, attributes, and where each one is recorded —
 kept in sync with what's actually in `src/telemetry/instruments.ts`, so you
 know exactly what to expect once you point a collector at it.
 
-## Collection is not built in
+## Collection: an opt-in bootstrap, not on by default
 
-The server only calls into `@opentelemetry/api` — there is no
-`@opentelemetry/sdk-metrics`, no exporter, and no collection configuration
-bundled into `src/`. Every instrument below is a safe no-op until
-*something* registers a global `MeterProvider` for this process, which is a
-separate, deploy-time concern this repo deliberately doesn't own (see
+Application code (`src/`, minus the bootstrap module below) only calls into
+`@opentelemetry/api` — no SDK, no exporter, no collection configuration is
+loaded unless you ask for it. Every instrument below is a safe no-op until
+*something* registers a global `MeterProvider` for this process. That's
+still a separate, deploy-time concern this repo doesn't wire into
+`npm start`/`npm run dev`/tests (see
 [`docs/proposal/otel-metrics-proposal.md`](proposal/otel-metrics-proposal.md)
-for the full reasoning).
+for the full reasoning) — but the repo now ships that piece too, as an
+opt-in preload module rather than leaving it entirely to the deployer.
 
-To actually collect these metrics, register an SDK `MeterProvider` +
-exporter **before** any application code loads — e.g. via a `--require`/
-`--import` preload module, using whatever OTel SDK distribution and exporter
-your collection platform expects. A minimal, illustrative example (not part
-of this server, not tested or maintained here — just a starting point):
+`src/otel-bootstrap.ts` (compiled to `dist/otel-bootstrap.js`) registers a
+`MeterProvider` backed by `@opentelemetry/exporter-prometheus`: a **pull**
+exporter that starts its own tiny HTTP server on port `9464` and serves
+`GET /metrics` in Prometheus exposition format — it does not push anything
+to a collector on its own, and it doesn't touch the app's own Fastify
+servers on `3000`/`3001`. Deliberately not an OTLP push exporter and not
+`@opentelemetry/sdk-node` (which pulls in auto-instrumentation/tracing
+machinery this repo doesn't want) — just `@opentelemetry/sdk-metrics` +
+`@opentelemetry/exporter-prometheus` registering a `MeterProvider` for the
+existing `@opentelemetry/api` calls to resolve against.
 
-```js
-// otel-bootstrap.js — illustrative only, not part of this server
-import { NodeSDK } from '@opentelemetry/sdk-node';
-import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
-import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
-
-new NodeSDK({
-  metricReader: new PeriodicExportingMetricReader({
-    exporter: new OTLPMetricExporter()
-  })
-}).start();
-```
+To enable it, preload the bootstrap module before the server starts:
 
 ```bash
-node --import ./otel-bootstrap.js dist/server.js
+node --import ./dist/otel-bootstrap.js dist/server.js
 ```
 
-Resource attributes like `service.name`/`service.version` are set by
-whichever `MeterProvider` you register (typically via the `OTEL_SERVICE_NAME`
-env var) — this server never hardcodes them.
+The published Docker image already does this by default (see `Dockerfile`'s
+`CMD` and `EXPOSE 3000 3001 9464`) — collection is opt-in for anyone running
+`dist/server.js` directly, but on for anyone running the container image.
+
+Resource attributes like `service.name` come from the `OTEL_SERVICE_NAME` /
+`OTEL_RESOURCE_ATTRIBUTES` env vars (via `@opentelemetry/resources`'
+`envDetector`) — this server never hardcodes them. If you'd rather ship
+metrics to a different backend (e.g. an OTLP collector), replace or extend
+`src/otel-bootstrap.ts` with the SDK distribution and exporter your platform
+expects; nothing else in this repo depends on Prometheus specifically.
 
 ## Naming and attribute conventions
 

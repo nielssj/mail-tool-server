@@ -34,6 +34,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist/src ./dist
 
 USER node
-EXPOSE 3000 3001
+EXPOSE 3000 3001 9464
 
-CMD ["node", "dist/server.js"]
+# otel-bootstrap.js is opt-in and deploy-time only (see docs/metrics.md) --
+# it registers the Prometheus MeterProvider before src/server.ts loads, and
+# is never referenced by npm start/dev or the test suite. Preloaded via
+# --import rather than merged into server.ts so local dev/tests stay
+# collection-free by default.
+CMD ["node", "--import", "./dist/otel-bootstrap.js", "dist/server.js"]
