@@ -165,6 +165,26 @@ _Idempotent._ Add and/or remove IMAP flags (e.g. \Seen, \Flagged) on a message.
 
 **Output:** `{ ok: boolean }`
 
+### `create_draft`
+
+Compose a draft email (to/cc/bcc, subject, text and/or html body, optional attachments) and save it into a mailbox — typically the account's Drafts folder, found via list_mailboxes' specialUse. Does not send the message.
+
+**Input:**
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `accountId` | string | yes | Account id, from list_accounts. |
+| `mailbox` | string | yes | Mailbox path to save the draft into, e.g. "Drafts" (from list_mailboxes). |
+| `to` | string[] | no | Recipient addresses, e.g. "Jane Doe <jane@example.com>". |
+| `cc` | string[] | no |  |
+| `bcc` | string[] | no |  |
+| `subject` | string | no |  |
+| `text` | string | no | Plain-text body. |
+| `html` | string | no | HTML body. |
+| `attachments` | { filename: string, mimeType: string, contentBase64: string }[] | no |  |
+
+**Output:** `{ mailbox: string, uid?: number, uidValidity?: string }`
+
 <!-- END GENERATED TOOLS -->
 
 ## Trying it with curl

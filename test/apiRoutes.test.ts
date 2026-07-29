@@ -86,6 +86,11 @@ const createMailboxServiceMock = (): MailboxService => {
   const getRawSource: MailboxService['getRawSource'] = vi.fn(async () => false as const);
   const moveMessage: MailboxService['moveMessage'] = vi.fn(async () => MOVE_RESULT);
   const setFlags: MailboxService['setFlags'] = vi.fn(async () => undefined);
+  const createDraft: MailboxService['createDraft'] = vi.fn(async () => ({
+    mailbox: 'Drafts',
+    uid: 9,
+    uidValidity: '123'
+  }));
 
   return {
     listMailboxes,
@@ -94,7 +99,8 @@ const createMailboxServiceMock = (): MailboxService => {
     getAttachment,
     getRawSource,
     moveMessage,
-    setFlags
+    setFlags,
+    createDraft
   };
 };
 
@@ -331,6 +337,79 @@ describe('API routes', () => {
         method: 'POST',
         url: '/accounts/acc-1/mailboxes/INBOX/messages/1/flags',
         payload: { add: [''] }
+      });
+      expect(response.statusCode).toBe(400);
+    });
+  });
+
+  describe('POST /accounts/:accountId/mailboxes/:mailbox/drafts', () => {
+    it('creates a draft on happy path', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/accounts/acc-1/mailboxes/Drafts/drafts',
+        payload: {
+          to: ['jane@example.com'],
+          subject: 'Hello',
+          text: 'Hi there',
+          attachments: [
+            { filename: 'a.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hi').toString('base64') }
+          ]
+        }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ mailbox: 'Drafts', uid: 9, uidValidity: '123' });
+      expect(mailboxService.createDraft).toHaveBeenCalledWith('acc-1', 'Drafts', {
+        to: ['jane@example.com'],
+        cc: undefined,
+        bcc: undefined,
+        subject: 'Hello',
+        text: 'Hi there',
+        html: undefined,
+        attachments: [
+          { filename: 'a.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hi').toString('base64') }
+        ]
+      });
+    });
+
+    it('accepts an empty body', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/accounts/acc-1/mailboxes/Drafts/drafts',
+        payload: {}
+      });
+      expect(response.statusCode).toBe(200);
+    });
+
+    it('returns 404 for unknown account', async () => {
+      vi.mocked(mailboxService.createDraft).mockRejectedValueOnce(
+        new Error('Unknown account id: "missing"')
+      );
+      const response = await app.inject({
+        method: 'POST',
+        url: '/accounts/missing/mailboxes/Drafts/drafts',
+        payload: {}
+      });
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('returns 403 for a read-only account', async () => {
+      const { ReadOnlyAccountError } = await import('../src/services/mailboxService.js');
+      vi.mocked(mailboxService.createDraft).mockRejectedValueOnce(
+        new ReadOnlyAccountError('acc-1', 'create_draft')
+      );
+      const response = await app.inject({
+        method: 'POST',
+        url: '/accounts/acc-1/mailboxes/Drafts/drafts',
+        payload: {}
+      });
+      expect(response.statusCode).toBe(403);
+    });
+
+    it('returns 400 for invalid input', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/accounts/acc-1/mailboxes/Drafts/drafts',
+        payload: { to: [''] }
       });
       expect(response.statusCode).toBe(400);
     });

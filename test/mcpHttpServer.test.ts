@@ -26,7 +26,8 @@ const makeMailboxService = (): MailboxService => ({
   getAttachment: async () => false,
   getRawSource: async () => false,
   moveMessage: async () => false,
-  setFlags: async () => undefined
+  setFlags: async () => undefined,
+  createDraft: async () => ({ mailbox: 'Drafts' })
 });
 
 describe('createMcpHttpServer', () => {
@@ -60,6 +61,7 @@ describe('createMcpHttpServer', () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'create_draft',
       'export_message',
       'get_attachment',
       'get_message',

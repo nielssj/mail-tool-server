@@ -126,7 +126,8 @@ const makeStubMailboxService = (): MailboxService => ({
   getAttachment: async () => false,
   getRawSource: async () => false,
   moveMessage: async () => false,
-  setFlags: async () => undefined
+  setFlags: async () => undefined,
+  createDraft: async () => ({ mailbox: 'Drafts' })
 });
 
 const makeStubAccountService = (): AccountService => ({

@@ -27,7 +27,8 @@ const makeFakeService = (overrides: Partial<Record<keyof MailboxService, () => u
     getAttachment: vi.fn(overrides.getAttachment ?? (() => Promise.resolve(false))),
     getRawSource: vi.fn(overrides.getRawSource ?? (() => Promise.resolve(false))),
     moveMessage: vi.fn(overrides.moveMessage ?? (() => Promise.resolve(false))),
-    setFlags: vi.fn(overrides.setFlags ?? (() => Promise.resolve(undefined)))
+    setFlags: vi.fn(overrides.setFlags ?? (() => Promise.resolve(undefined))),
+    createDraft: vi.fn(overrides.createDraft ?? (() => Promise.resolve({ mailbox: 'Drafts' })))
   }) as unknown as MailboxService;
 
 describe('withMailboxOperationMetrics', () => {
@@ -149,6 +150,16 @@ describe('withMailboxOperationMetrics', () => {
 
       const points = await histogramPoints();
       expect(points[0]!.attributes).toMatchObject({ operation: 'set_flags', outcome: 'success' });
+    });
+
+    it('create_draft', async () => {
+      const withMailboxOperationMetrics = await loadDecorator();
+      const service = withMailboxOperationMetrics(makeFakeService(), ACCOUNTS);
+
+      await service.createDraft('acc-1', 'Drafts', {});
+
+      const points = await histogramPoints();
+      expect(points[0]!.attributes).toMatchObject({ operation: 'create_draft', outcome: 'success' });
     });
   });
 
