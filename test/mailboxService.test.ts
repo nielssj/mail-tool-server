@@ -61,6 +61,7 @@ type MockClientOverrides = Partial<{
   messageMove: () => Promise<object | false>;
   messageFlagsAdd: () => Promise<boolean>;
   messageFlagsRemove: () => Promise<boolean>;
+  append: () => Promise<{ destination: string; uid?: number; uidValidity?: bigint } | false>;
   connect: () => Promise<void>;
   logout: () => Promise<void>;
 }>;
@@ -88,6 +89,9 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
   const messageFlagsRemove = vi.fn(
     overrides.messageFlagsRemove ?? (() => Promise.resolve(true))
   );
+  const append = vi.fn(
+    overrides.append ?? (() => Promise.resolve({ destination: 'Drafts' }))
+  );
 
   class MockMailboxClient {
     connect = connect;
@@ -100,6 +104,7 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
     messageMove = messageMove;
     messageFlagsAdd = messageFlagsAdd;
     messageFlagsRemove = messageFlagsRemove;
+    append = append;
   }
 
   const ctor = MockMailboxClient as unknown as MailboxClientConstructor;
@@ -115,7 +120,8 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
     download,
     messageMove,
     messageFlagsAdd,
-    messageFlagsRemove
+    messageFlagsRemove,
+    append
   };
 };
 
@@ -593,6 +599,80 @@ describe('createMailboxService', () => {
       ).rejects.toThrow(/Account "acc-ro" is read-only; set_flags is disabled/);
       expect(connect).not.toHaveBeenCalled();
       expect(messageFlagsAdd).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createDraft', () => {
+    it('builds an RFC822 message, appends it with the \\Draft flag, then logs out', async () => {
+      const { ctor, connect, logout, mailboxOpen, append } = buildMockCtor({
+        append: () => Promise.resolve({ destination: 'Drafts', uid: 7, uidValidity: BigInt(42) })
+      });
+
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const result = await service.createDraft('acc-1', 'Drafts', {
+        to: ['jane@example.com'],
+        subject: 'Hello',
+        text: 'Hi there'
+      });
+
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(mailboxOpen).toHaveBeenCalledWith('Drafts');
+      expect(append).toHaveBeenCalledTimes(1);
+      const [path, content, flags] = append.mock.calls[0] as unknown as [string, Buffer, string[]];
+      expect(path).toBe('Drafts');
+      expect(Buffer.isBuffer(content)).toBe(true);
+      expect(content.toString('utf8')).toContain('Subject: Hello');
+      expect(content.toString('utf8')).toContain('Hi there');
+      expect(flags).toEqual(['\\Draft']);
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ mailbox: 'Drafts', uid: 7, uidValidity: '42' });
+    });
+
+    it('omits uid/uidValidity when the server does not report them', async () => {
+      const { ctor } = buildMockCtor({
+        append: () => Promise.resolve({ destination: 'Drafts' })
+      });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+
+      const result = await service.createDraft('acc-1', 'Drafts', {});
+
+      expect(result).toEqual({ mailbox: 'Drafts', uid: undefined, uidValidity: undefined });
+    });
+
+    it('rejects with ReadOnlyAccountError for a read-only account without connecting', async () => {
+      const { ctor, connect, append } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+
+      await expect(service.createDraft('acc-ro', 'Drafts', {})).rejects.toThrow(
+        ReadOnlyAccountError
+      );
+      await expect(service.createDraft('acc-ro', 'Drafts', {})).rejects.toThrow(
+        /Account "acc-ro" is read-only; create_draft is disabled/
+      );
+      expect(connect).not.toHaveBeenCalled();
+      expect(append).not.toHaveBeenCalled();
+    });
+
+    it('rejects an oversized attachment without connecting', async () => {
+      const { ctor, connect, append } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      const oversized = Buffer.alloc(26 * 1024 * 1024).toString('base64');
+
+      await expect(
+        service.createDraft('acc-1', 'Drafts', {
+          attachments: [{ filename: 'big.bin', mimeType: 'application/octet-stream', contentBase64: oversized }]
+        })
+      ).rejects.toThrow(/exceeding the/);
+      expect(connect).not.toHaveBeenCalled();
+      expect(append).not.toHaveBeenCalled();
+    });
+
+    it('throws for unknown accountId', async () => {
+      const { ctor } = buildMockCtor();
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+      await expect(service.createDraft('missing', 'Drafts', {})).rejects.toThrow(
+        /Unknown account id/
+      );
     });
   });
 });

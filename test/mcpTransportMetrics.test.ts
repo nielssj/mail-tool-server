@@ -26,7 +26,8 @@ const makeMailboxService = (): MailboxService => ({
   getAttachment: async () => false,
   getRawSource: async () => false,
   moveMessage: async () => false,
-  setFlags: async () => undefined
+  setFlags: async () => undefined,
+  createDraft: async () => ({ mailbox: 'Drafts' })
 });
 
 type HistogramPoint = { attributes: Record<string, unknown>; value: Histogram };

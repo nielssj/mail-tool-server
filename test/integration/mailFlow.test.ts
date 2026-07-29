@@ -211,6 +211,7 @@ describe('integration: real IMAP flow against GreenMail', () => {
     // via a throwaway imapflow client (real IMAP APPEND, no mocking).
     const seed = await connectClient(host, port);
     await seed.mailboxCreate('Archive');
+    await seed.mailboxCreate('Drafts');
     await seed.append('INBOX', rawMessage('First message', 'hello world'), ['\\Seen']);
     await seed.logout();
 
@@ -302,7 +303,42 @@ describe('integration: real IMAP flow against GreenMail', () => {
       expect(archiveRes.statusCode).toBe(200);
       expect((archiveRes.json() as unknown[]).length).toBe(1);
 
-      // 6. Webhook assertion: append a fresh message while the watcher idles
+      // 6. Create a draft via IMAP APPEND (real MIME composition, real
+      //    server-side round-trip -- not a mock), then verify it landed in
+      //    Drafts with the right subject/body and the \Draft flag set.
+      const draftRes = await app.inject({
+        method: 'POST',
+        url: `/accounts/${account.id}/mailboxes/Drafts/drafts`,
+        payload: {
+          to: ['someone@example.com'],
+          subject: 'Draft subject',
+          text: 'Draft body text'
+        }
+      });
+      expect(draftRes.statusCode).toBe(200);
+      const draft = draftRes.json() as { mailbox: string; uid?: number };
+      expect(draft.mailbox).toBe('Drafts');
+
+      const draftsListRes = await app.inject({
+        method: 'GET',
+        url: `/accounts/${account.id}/mailboxes/Drafts/messages`
+      });
+      expect(draftsListRes.statusCode).toBe(200);
+      const draftMessages = draftsListRes.json() as Array<{ uid: number; subject?: string }>;
+      expect(draftMessages.length).toBe(1);
+      expect(draftMessages[0]!.subject).toBe('Draft subject');
+
+      const draftUid = draft.uid ?? draftMessages[0]!.uid;
+      const draftDetailRes = await app.inject({
+        method: 'GET',
+        url: `/accounts/${account.id}/mailboxes/Drafts/messages/${draftUid}`
+      });
+      expect(draftDetailRes.statusCode).toBe(200);
+      const draftDetail = draftDetailRes.json() as { body: string; flags: string[] };
+      expect(draftDetail.body).toContain('Draft body text');
+      expect(draftDetail.flags).toContain('\\Draft');
+
+      // 7. Webhook assertion: append a fresh message while the watcher idles
       //    on INBOX and assert a real newMail event reaches the receiver,
       //    carrying the message's real UID (from IMAP APPEND's own UIDPLUS
       //    response, not just inferred).

@@ -12,7 +12,8 @@ const createMailboxServiceMock = (): MailboxService => ({
   getAttachment: vi.fn(),
   getRawSource: vi.fn(),
   moveMessage: vi.fn(),
-  setFlags: vi.fn()
+  setFlags: vi.fn(),
+  createDraft: vi.fn()
 });
 
 describe('central error handler', () => {

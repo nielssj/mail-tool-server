@@ -80,6 +80,10 @@ export const withConnectionMetrics = (ctor: MailboxClientConstructor): MailboxCl
     ): ReturnType<MailboxClient['messageFlagsRemove']> {
       return this.inner.messageFlagsRemove(...args);
     }
+
+    append(...args: Parameters<MailboxClient['append']>): ReturnType<MailboxClient['append']> {
+      return this.inner.append(...args);
+    }
   }
 
   return InstrumentedMailboxClient as unknown as MailboxClientConstructor;

@@ -7,6 +7,7 @@ import { registerAccountTools } from './tools/accounts.js';
 import { registerMessageTools } from './tools/messages.js';
 import { registerDeliveryTools } from './tools/delivery.js';
 import { registerMutationTools } from './tools/mutations.js';
+import { registerDraftTools } from './tools/drafts.js';
 
 export type CreateMcpServerOptions = {
   mailboxService: MailboxService;
@@ -31,6 +32,7 @@ export const createMcpServer = (options: CreateMcpServerOptions): McpServer => {
   registerMessageTools(server, options);
   registerDeliveryTools(server, options);
   registerMutationTools(server, options);
+  registerDraftTools(server, options);
 
   return server;
 };

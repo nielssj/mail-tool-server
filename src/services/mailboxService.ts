@@ -6,8 +6,10 @@ import type {
   MailboxObject,
   MessageStructureObject,
   CopyResponseObject,
-  StoreOptions
+  StoreOptions,
+  AppendResponseObject
 } from 'imapflow';
+import { createTransport } from 'nodemailer';
 import type { AccountConfig } from '../utils/config/schema.js';
 import { ImapConnectionError } from '../imap/clientFactory.js';
 
@@ -88,6 +90,12 @@ export type MailboxClient = {
     flags: string[],
     options?: StoreOptions
   ) => Promise<boolean>;
+  append: (
+    path: string,
+    content: string | Buffer,
+    flags?: string[],
+    idate?: Date | string
+  ) => Promise<AppendResponseObject | false>;
 };
 
 export type MailboxClientConstructor = new (options: {
@@ -102,6 +110,33 @@ export type MailboxClientConstructor = new (options: {
 export type ListMessagesOptions = {
   limit?: number;
   sinceUid?: number;
+};
+
+export type DraftAttachmentInput = {
+  filename: string;
+  mimeType: string;
+  /** Base64-encoded content — inline in the request, same as other JSON
+   * fields. There's no staged-blob input path (unlike get_attachment's
+   * output side), so callers must have the bytes in hand already. */
+  contentBase64: string;
+};
+
+export type DraftInput = {
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  text?: string;
+  html?: string;
+  attachments?: DraftAttachmentInput[];
+};
+
+export type DraftResult = {
+  mailbox: string;
+  uid?: number;
+  /** Stringified — the underlying value is a bigint (UIDVALIDITY), which
+   * doesn't survive JSON serialization as a number. */
+  uidValidity?: string;
 };
 
 export type MailboxServiceOptions = {
@@ -144,6 +179,11 @@ export type MailboxService = {
     add: string[],
     remove: string[]
   ) => Promise<void>;
+  createDraft: (
+    accountId: string,
+    mailbox: string,
+    draft: DraftInput
+  ) => Promise<DraftResult>;
 };
 
 /** Raw byte cap for the list-view snippet fetch — kept generous relative to
@@ -159,7 +199,7 @@ const SNIPPET_FETCH_MAX_BYTES = 1024;
  * already reports (bodyStructure part size / RFC822.SIZE) before fetching
  * any content, so an oversized attachment or message is rejected without
  * ever pulling its bytes into memory. */
-const MAX_FETCH_BYTES = 25 * 1024 * 1024;
+export const MAX_FETCH_BYTES = 25 * 1024 * 1024;
 
 const tooLargeError = (kind: string, id: string | number, sizeBytes: number): Error =>
   new Error(
@@ -315,6 +355,40 @@ const streamToBuffer = async (stream: NodeJS.ReadableStream): Promise<Buffer> =>
 
 const streamToString = async (stream: NodeJS.ReadableStream): Promise<string> =>
   (await streamToBuffer(stream)).toString('utf8');
+
+/**
+ * Compiles a DraftInput into a full RFC822 message buffer using nodemailer's
+ * "stream transport" — a documented, network-free transport that builds the
+ * MIME message and hands it back instead of sending it (see nodemailer's
+ * StreamTransport with `buffer: true`). This reuses nodemailer's MIME
+ * builder (headers, multipart, base64/quoted-printable encoding, address
+ * formatting) rather than hand-rolling RFC822/MIME construction.
+ */
+const buildDraftMessage = async (draft: DraftInput): Promise<Buffer> => {
+  const attachments = (draft.attachments ?? []).map((attachment) => {
+    const content = Buffer.from(attachment.contentBase64, 'base64');
+    if (content.length > MAX_FETCH_BYTES) {
+      throw tooLargeError('Draft attachment', attachment.filename, content.length);
+    }
+    return {
+      filename: attachment.filename,
+      contentType: attachment.mimeType,
+      content
+    };
+  });
+
+  const transport = createTransport({ streamTransport: true, buffer: true });
+  const info = await transport.sendMail({
+    to: draft.to,
+    cc: draft.cc,
+    bcc: draft.bcc,
+    subject: draft.subject,
+    text: draft.text,
+    html: draft.html,
+    attachments
+  });
+  return info.message as Buffer;
+};
 
 export const createMailboxService = (
   accounts: AccountConfig[],
@@ -480,6 +554,30 @@ export const createMailboxService = (
     });
   };
 
+  const createDraft = async (
+    accountId: string,
+    mailbox: string,
+    draft: DraftInput
+  ): Promise<DraftResult> => {
+    const account = findAccount(accounts, accountId);
+    if (account.readOnly) {
+      throw new ReadOnlyAccountError(accountId, 'create_draft');
+    }
+    const message = await buildDraftMessage(draft);
+    return withClient(account, ctor, async (client) => {
+      await client.mailboxOpen(mailbox);
+      const result = await client.append(mailbox, message, ['\\Draft']);
+      if (!result) {
+        throw new Error(`Failed to save draft to mailbox "${mailbox}"`);
+      }
+      return {
+        mailbox: result.destination,
+        uid: result.uid,
+        uidValidity: result.uidValidity != null ? result.uidValidity.toString() : undefined
+      };
+    });
+  };
+
   return {
     listMailboxes,
     listMessages,
@@ -487,6 +585,7 @@ export const createMailboxService = (
     getAttachment,
     getRawSource,
     moveMessage,
-    setFlags
+    setFlags,
+    createDraft
   };
 };

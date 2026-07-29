@@ -89,6 +89,7 @@ export const withMailboxOperationMetrics = (
     getAttachment: instrumentOperation('get_attachment', knownAccountIds, service.getAttachment),
     getRawSource: instrumentOperation('get_raw_source', knownAccountIds, service.getRawSource),
     moveMessage: instrumentOperation('move_message', knownAccountIds, service.moveMessage),
-    setFlags: instrumentOperation('set_flags', knownAccountIds, service.setFlags)
+    setFlags: instrumentOperation('set_flags', knownAccountIds, service.setFlags),
+    createDraft: instrumentOperation('create_draft', knownAccountIds, service.createDraft)
   };
 };

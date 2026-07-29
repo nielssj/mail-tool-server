@@ -37,6 +37,7 @@
     "@opentelemetry/api": "^1.9.1",
     "fastify": "^5.10.0",
     "imapflow": "^1.4.6",
+    "nodemailer": "^9.0.3",
     "pino": "^10.3.1",
     "zod": "^4.4.3"
   },
@@ -44,6 +45,7 @@
     "@eslint/js": "^10.0.1",
     "@opentelemetry/sdk-metrics": "^2.9.0",
     "@types/node": "^26.1.1",
+    "@types/nodemailer": "^8.0.1",
     "@typescript-eslint/eslint-plugin": "^8.63.0",
     "@typescript-eslint/parser": "^8.63.0",
     "aws-sdk-client-mock": "^4.1.0",

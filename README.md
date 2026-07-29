@@ -216,8 +216,8 @@ automatically by `npm run dev`/`npm start` alongside the HTTP API; set
 `HTTP_ENABLED=false` to run the MCP server on its own.
 
 `get_attachment`/`export_message` require [Object storage](#object-storage)
-configured. `move_message`/`set_flags` are disabled per-account by
-[`readOnly`](#configuration).
+configured. `move_message`/`set_flags`/`create_draft` are disabled
+per-account by [`readOnly`](#configuration).
 
 ### Connecting a client
 
