@@ -176,11 +176,15 @@ points to:
 ```sh
 docker pull ghcr.io/nielssj/mail-tool-server:latest
 docker run --rm \
-  -p 3000:3000 -p 3001:3001 \
+  -p 3000:3000 -p 3001:3001 -p 9464:9464 \
   -v $(pwd)/config.json:/app/config.json \
   -e CONFIG_PATH=/app/config.json \
   ghcr.io/nielssj/mail-tool-server:latest
 ```
+
+Port `9464` serves Prometheus-format metrics (`GET /metrics`) — see
+[Metrics](#metrics). It's only exposed/scraped if you publish it; the
+container always runs with collection enabled.
 
 ### What triggers a version bump
 
@@ -290,10 +294,13 @@ MCP transport health. See **[docs/metrics.md](docs/metrics.md)** for the
 full reference (every metric's name, type, unit, attributes, and
 description).
 
-Metrics are emitted via `@opentelemetry/api` only — there's no bundled SDK,
-exporter, or collection configuration. Every instrument is a safe no-op
-until something registers a global `MeterProvider` for the process (see
-`docs/metrics.md` for how); nothing here is required to run the server.
+Application code emits metrics via `@opentelemetry/api` only — every
+instrument is a safe no-op until something registers a global
+`MeterProvider`. The published Docker image does this out of the box: it
+preloads `dist/otel-bootstrap.js`, which registers a Prometheus exporter
+serving `GET :9464/metrics`. Running `dist/server.js` directly (e.g. `npm
+start`) does not enable collection — see [`docs/metrics.md`](docs/metrics.md)
+for how to opt in.
 
 ## Testing
 
