@@ -26,6 +26,7 @@ const port = Number(process.env.PORT ?? 3000);
 const mcpPort = Number(process.env.MCP_PORT ?? 3001);
 const httpEnabled = process.env.HTTP_ENABLED !== 'false';
 const mcpEnabled = process.env.MCP_ENABLED !== 'false';
+const accessLogEnabled = process.env.ACCESS_LOG_ENABLED !== 'false';
 
 const logger = createLogger();
 
@@ -39,7 +40,7 @@ const startHttpServer = async (
     return undefined;
   }
 
-  const app = await buildApp({ watchers, mailboxService });
+  const app = await buildApp({ watchers, mailboxService, accessLogEnabled });
   await app.listen({ host, port });
   return app;
 };

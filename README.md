@@ -135,6 +135,7 @@ Example (`config.example.json`):
 | `MCP_ENABLED`   | `true`         | Set to `false` to disable the MCP server and run only the HTTP API.   |
 | `NODE_ENV`      | `development`  | `development`/`test` produce human-readable logs; anything else emits structured JSON. |
 | `LOG_LEVEL`     | `info`         | pino log level (`trace`…`fatal`, or `silent`). The `level` field in structured JSON output is textual (`info`, `error`, ...), not pino's raw numeric level. |
+| `ACCESS_LOG_ENABLED` | `true`    | Set to `false` to suppress the per-request `incoming request`/`request completed` log lines (e.g. to cut `/health` probe noise) independently of `LOG_LEVEL`. |
 
 ## Running
 
