@@ -22,7 +22,7 @@ describe('createLogger', () => {
     const parsed = JSON.parse(output.trim());
 
     expect(parsed).toMatchObject({
-      level: 30,
+      level: 'info',
       accountId: 'acc-1',
       msg: 'log-test'
     });

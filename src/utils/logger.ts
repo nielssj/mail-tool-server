@@ -11,7 +11,10 @@ export const createLogger = (
 ): Logger => {
   const env = config.env ?? process.env.NODE_ENV ?? 'development';
   const options: LoggerOptions = {
-    level: config.level ?? process.env.LOG_LEVEL ?? 'info'
+    level: config.level ?? process.env.LOG_LEVEL ?? 'info',
+    formatters: {
+      level: (label) => ({ level: label })
+    }
   };
 
   if (options.level !== 'silent' && (env === 'development' || env === 'test')) {
