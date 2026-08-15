@@ -1,4 +1,5 @@
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
+import type { DestinationStream } from 'pino';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { createLogger, type LoggerConfig } from './utils/logger.js';
@@ -9,13 +10,16 @@ import { errorHandler } from './api/errorHandler.js';
 
 export type BuildAppOptions = {
   loggerConfig?: LoggerConfig;
+  loggerDestination?: DestinationStream;
+  accessLogEnabled?: boolean;
   watchers?: AccountWatcher[];
   mailboxService?: MailboxService;
 };
 
 export const buildApp = async (options: BuildAppOptions = {}) => {
   const app = Fastify({
-    loggerInstance: createLogger(options.loggerConfig)
+    loggerInstance: createLogger(options.loggerConfig, options.loggerDestination),
+    logController: new LogController({ disableRequestLogging: options.accessLogEnabled === false })
   });
 
   app.setErrorHandler(errorHandler);
