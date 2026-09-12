@@ -256,17 +256,47 @@ maintains, and it distinguishes "the retry loop is stuck right now" from
 "reconnected fine" — a distinction a 60-second scrape cannot draw when the
 event it is trying to see lasts one second.
 
-### Open question for review
+#### 6. A last-resort `uncaughtException` handler — logging only, semantics unchanged
 
-**Should we also add a `process.on('uncaughtException')` last-resort
-handler?** It would guarantee that no future unhandled emitter error takes
-the process down silently, and would let us log the crash through pino
-before exiting. The argument against is that it can mask real bugs and
-leave the process in an undefined state. My recommendation is to add one
-that logs and then **still exits non-zero** — a safety net for
-observability, not a way to keep running through unknown faults. Flagging
-it rather than deciding it, since it changes failure semantics
-process-wide.
+**Decided: add it.** Purely to improve the crash record, with the exit
+behaviour left exactly as Node has it today.
+
+The handler logs the exception through pino at `fatal` and then calls
+`process.exit(1)`. Node's own default for an uncaught exception is to print
+the stack to stderr and exit `1`, so the observable contract is unchanged:
+the process still dies, the container still exits non-zero, Kubernetes
+still restarts it, and no code runs on past a fault it doesn't understand.
+The only thing that changes is what lands in Loki — a structured JSON line
+with the error name, message, stack, and a `fatal` level the
+`detected_level` heuristic can classify properly, instead of an
+eighteen-line raw stderr dump that reads as a burst of unrelated `error`
+lines (which is exactly how the current incident presents).
+
+This is deliberately *not* a keep-running handler. The standard objection to
+`uncaughtException` — that it resumes a process whose state is now undefined
+— applies to handlers that swallow and continue. It does not apply here,
+because the handler's last statement is the same exit Node would have
+performed itself.
+
+Two implementation notes:
+
+- **Exit code fidelity.** Use `process.exit(1)` explicitly. Returning from
+  the handler without exiting is what changes semantics, and is the failure
+  mode to guard against in review.
+- **Flush before exit.** `createLogger` attaches a `pino-pretty` transport
+  only when `NODE_ENV` is `development` or `test`; in production it writes
+  synchronously to stdout, so a `fatal` immediately followed by
+  `process.exit(1)` flushes. Under the dev/test transport (a worker thread)
+  the line can be truncated by an immediate exit, so the handler should
+  route through a small flush-then-exit helper rather than assuming the
+  synchronous path.
+
+**Related but separate: `unhandledRejection`.** Node 15+ treats an
+unhandled promise rejection the same way — it terminates the process — and
+the repo has no handler for it either. It is the same class of gap and the
+same one-line fix, so it is included in Task 2 alongside `uncaughtException`
+with identical log-then-exit-1 semantics. Calling it out explicitly rather
+than folding it in silently, since it wasn't part of the original question.
 
 ---
 
@@ -310,14 +340,21 @@ process-wide.
   mid-operation socket reset surfaces as a failed request (mapped through
   the existing `ImapConnectionError` / error-handler path) rather than a
   process crash.
-- Decide and implement the `process.on('uncaughtException')` question above
-  per review outcome.
+- Add `process.on('uncaughtException')` and `process.on('unhandledRejection')`
+  handlers in `src/server.ts` that log through pino at `fatal` and then
+  `process.exit(1)` — preserving Node's existing exit semantics exactly
+  (see section 6). Include the flush-then-exit helper so the line is not
+  truncated under the dev/test pino transport.
 - Tests in `test/clientFactory.test.ts` / `test/mailboxService.test.ts`
   covering a client that emits `error` mid-operation.
 
 **Acceptance criteria:**
 - A socket error during an in-flight operation rejects that operation and
   leaves the process alive.
+- The `uncaughtException` / `unhandledRejection` handlers emit one
+  structured `fatal` line and exit with code `1` — asserted in
+  `test/server.test.ts` against the exit code, not just the log output, so
+  a regression that swallows the exit is caught.
 - `npm run lint`, `npx tsc --noEmit` and `npm test` pass.
 
 #### Task 3 — Documentation
