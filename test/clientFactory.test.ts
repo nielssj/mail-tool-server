@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi } from 'vitest';
 import {
   createConnectedImapClient,
@@ -30,12 +31,15 @@ const prepareImapMock = ({
   const connect = vi.fn(connectImpl);
   const logout = vi.fn(logoutImpl);
   const ctorSpy = vi.fn();
+  const instances: MockImapClient[] = [];
 
-  class MockImapClient {
+  class MockImapClient extends EventEmitter {
     constructor(options: unknown) {
+      super();
       if (withCtorSpy) {
         ctorSpy(options);
       }
+      instances.push(this);
     }
     connect = connect;
     logout = logout;
@@ -45,6 +49,7 @@ const prepareImapMock = ({
     connect,
     logout,
     ctorSpy,
+    instances,
     ImapClientCtor: MockImapClient as unknown as ImapClientConstructor
   };
 };
@@ -107,5 +112,21 @@ describe('createConnectedImapClient', () => {
 
     await expect(close()).resolves.toBeUndefined();
     expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers an error listener so a mid-operation socket reset does not crash the process', async () => {
+    const { instances, ImapClientCtor } = prepareImapMock({});
+
+    const { close } = await createConnectedImapClient(ACCOUNT, {
+      ImapClientCtor
+    });
+
+    // ImapFlow (an EventEmitter) rethrows an 'error' event with no
+    // listener as an uncaught exception -- if createConnectedImapClient
+    // failed to register one, this would throw synchronously instead of
+    // being swallowed.
+    expect(() => instances[0]?.emit('error', new Error('ECONNRESET'))).not.toThrow();
+
+    await close();
   });
 });

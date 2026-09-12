@@ -84,6 +84,16 @@ export const withConnectionMetrics = (ctor: MailboxClientConstructor): MailboxCl
     append(...args: Parameters<MailboxClient['append']>): ReturnType<MailboxClient['append']> {
       return this.inner.append(...args);
     }
+
+    on(...args: Parameters<MailboxClient['on']>): MailboxClient {
+      this.inner.on(...args);
+      return this;
+    }
+
+    off(...args: Parameters<MailboxClient['off']>): MailboxClient {
+      this.inner.off(...args);
+      return this;
+    }
   }
 
   return InstrumentedMailboxClient as unknown as MailboxClientConstructor;

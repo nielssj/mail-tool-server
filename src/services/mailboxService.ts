@@ -96,6 +96,8 @@ export type MailboxClient = {
     flags?: string[],
     idate?: Date | string
   ) => Promise<AppendResponseObject | false>;
+  on: (event: 'error', listener: (err: Error) => void) => MailboxClient;
+  off: (event: 'error', listener: (err: Error) => void) => MailboxClient;
 };
 
 export type MailboxClientConstructor = new (options: {
@@ -206,6 +208,9 @@ const tooLargeError = (kind: string, id: string | number, sizeBytes: number): Er
     `${kind} "${id}" is ${sizeBytes} bytes, exceeding the ${MAX_FETCH_BYTES}-byte limit`
   );
 
+const toError = (error: unknown): Error =>
+  error instanceof Error ? error : new Error(String(error));
+
 const LIST_FETCH_QUERY: FetchQueryObject = {
   uid: true,
   flags: true,
@@ -252,9 +257,28 @@ const withClient = async <T>(
     );
   }
 
+  // ImapFlow extends EventEmitter and rethrows an `error` event with no
+  // listener as an uncaught exception. Race the operation against the
+  // socket's error event so a mid-operation reset rejects this request
+  // (mapped to the same ImapConnectionError the connect-failure path
+  // above already produces) instead of crashing the process.
+  let handleError!: (error: unknown) => void;
+  const errorRejection = new Promise<never>((_, reject) => {
+    handleError = (error: unknown) => {
+      reject(
+        new ImapConnectionError(
+          `IMAP connection to account "${account.id}" was reset during the operation`,
+          { cause: toError(error) }
+        )
+      );
+    };
+  });
+  client.on('error', handleError);
+
   try {
-    return await fn(client);
+    return await Promise.race([fn(client), errorRejection]);
   } finally {
+    client.off('error', handleError);
     try {
       await client.logout();
     } catch {

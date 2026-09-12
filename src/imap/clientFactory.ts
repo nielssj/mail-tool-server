@@ -11,6 +11,8 @@ export class ImapConnectionError extends Error {
 export type ImapClient = {
   connect: () => Promise<void>;
   logout: () => Promise<void>;
+  on: (event: 'error', listener: (err: Error) => void) => ImapClient;
+  off: (event: 'error', listener: (err: Error) => void) => ImapClient;
 };
 
 export type ImapClientConstructor = new (options: {
@@ -52,9 +54,19 @@ export const createConnectedImapClient = async (
     );
   }
 
+  // ImapFlow extends EventEmitter and rethrows an `error` event with no
+  // listener as an uncaught exception. This client is short-lived and its
+  // caller drives operations directly against it, so there's no in-flight
+  // promise to reject here -- registering a listener is enough to turn a
+  // mid-operation socket reset into a failed command (ImapFlow rejects the
+  // pending command itself) instead of a process crash.
+  const handleError = (): void => undefined;
+  client.on('error', handleError);
+
   return {
     client,
     close: async () => {
+      client.off('error', handleError);
       try {
         await client.logout();
       } catch {

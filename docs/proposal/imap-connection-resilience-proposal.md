@@ -333,7 +333,7 @@ than folding it in silently, since it wasn't part of the original question.
 - `npm run lint`, `npx tsc --noEmit` and `npm test` pass.
 
 #### Task 2 — Error handling for short-lived operation clients
-**Status:** TODO
+**Status:** DONE
 **Description:**
 - Attach `error` listeners in `src/imap/clientFactory.ts` and to the
   per-operation clients in `src/services/mailboxService.ts`, so a

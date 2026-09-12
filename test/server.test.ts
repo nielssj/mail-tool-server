@@ -1,6 +1,12 @@
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import type { AccountWatcher } from '../src/imap/watcher.js';
+
+const FATAL_HANDLERS_FIXTURE = fileURLToPath(
+  new URL('./fixtures/fatalErrorHandlersFixture.ts', import.meta.url)
+);
 
 const makeWatcher = () =>
   ({
@@ -49,5 +55,33 @@ describe('buildApp', () => {
 
       await expect(app.close()).resolves.toBeUndefined();
     });
+  });
+
+  describe('fatal error handlers', () => {
+    // Run out-of-process: a real uncaughtException/unhandledRejection with
+    // installFatalErrorHandlers wired up calls process.exit(1), which would
+    // otherwise kill the test runner itself. This also asserts the actual
+    // exit code, not just the log output, so a regression that swallows the
+    // exit (e.g. returning from the handler without exiting) is caught.
+    it.each(['uncaughtException', 'unhandledRejection'] as const)(
+      'logs one structured fatal line and exits with code 1 on %s',
+      (mode) => {
+        const result = spawnSync(
+          process.execPath,
+          ['--import', 'tsx', FATAL_HANDLERS_FIXTURE, mode],
+          { encoding: 'utf8' }
+        );
+
+        expect(result.status).toBe(1);
+
+        const lines = result.stdout.trim().split('\n').filter(Boolean);
+        expect(lines).toHaveLength(1);
+
+        const logLine = JSON.parse(lines[0]!) as { level: string; err: { message: string } };
+        expect(logLine.level).toBe('fatal');
+        expect(logLine.err.message).toBe('boom');
+      },
+      10_000
+    );
   });
 });
