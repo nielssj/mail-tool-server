@@ -358,7 +358,7 @@ than folding it in silently, since it wasn't part of the original question.
 - `npm run lint`, `npx tsc --noEmit` and `npm test` pass.
 
 #### Task 3 — Documentation
-**Status:** TODO
+**Status:** DONE
 **Description:**
 - Document the new reconnect/escalation behaviour and its tunables in
   `README.md`.
