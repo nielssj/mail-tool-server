@@ -303,7 +303,7 @@ than folding it in silently, since it wasn't part of the original question.
 ### Task Breakdown
 
 #### Task 1 — Watcher error handling, reconnect supervision, and logging
-**Status:** TODO
+**Status:** DONE
 **Description:**
 - Add an `error` listener to `attachClientListeners` /
   `detachClientListeners` in `src/imap/watcher.ts`, routing into

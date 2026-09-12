@@ -48,6 +48,7 @@ type ExpungeUpdate = {
 
 type WatcherClientEvents = {
   close: () => void;
+  error: (err: Error) => void;
   exists: (update: ExistsUpdate | number) => void;
   flags: (update: FlagsUpdate) => void;
   expunge: (update: ExpungeUpdate) => void;
@@ -81,15 +82,26 @@ export type WatcherClientConstructor = new (
 ) => WatcherClient;
 
 export type WatcherLogger = {
+  debug: (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
   warn: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
 };
 
 export type AccountWatcherOptions = {
   WatcherClientCtor?: WatcherClientConstructor;
+  /** Base delay for the exponential reconnect backoff. */
   reconnectDelayMs?: number;
+  /** Cap on the backed-off reconnect delay. */
+  maxReconnectDelayMs?: number;
+  /** Consecutive failed reconnect attempts before escalating to an `error`
+   * log. Resets on the next successful reconnect. */
+  reconnectFailureThreshold?: number;
   now?: () => Date;
   logger?: WatcherLogger;
+  /** Jitter source for the backoff delay, injectable for deterministic
+   * tests. Defaults to `Math.random`. */
+  random?: () => number;
 };
 
 type AccountWatcherEvents = {
@@ -101,16 +113,25 @@ type AccountWatcherEvents = {
 };
 
 const DEFAULT_RECONNECT_DELAY_MS = 1_000;
+const DEFAULT_MAX_RECONNECT_DELAY_MS = 30_000;
+const DEFAULT_RECONNECT_FAILURE_THRESHOLD = 5;
 /** Matches webhookDispatcher.ts's existing MAX_ATTEMPTS convention rather
  * than inventing a new retry policy for this second, unrelated call site. */
 const FETCH_UID_ATTEMPTS = 2;
 const noopLogger: WatcherLogger = {
+  debug: () => undefined,
+  info: () => undefined,
   warn: () => undefined,
   error: () => undefined
 };
 
 const toError = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error));
+
+const errorCode = (error: unknown): string | undefined =>
+  typeof error === 'object' && error != null && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
 
 const normalizeFlags = (flags?: Iterable<string>): string[] =>
   flags ? Array.from(flags) : [];
@@ -119,6 +140,12 @@ export class AccountWatcher extends EventEmitter {
   private readonly WatcherClientCtor: WatcherClientConstructor;
 
   private readonly reconnectDelayMs: number;
+
+  private readonly maxReconnectDelayMs: number;
+
+  private readonly reconnectFailureThreshold: number;
+
+  private readonly random: () => number;
 
   private readonly now: () => Date;
 
@@ -135,6 +162,22 @@ export class AccountWatcher extends EventEmitter {
   private client?: WatcherClient;
 
   private reconnectTimer?: NodeJS.Timeout;
+
+  /** Consecutive failed reconnect attempts in the current outage; reset on
+   * a successful reconnect. Drives the escalation-to-`error` threshold. */
+  private consecutiveFailures = 0;
+
+  /** Total reconnect attempts made since the outage started; reset on a
+   * successful reconnect. Reported in the recovery `info` log. */
+  private reconnectAttempts = 0;
+
+  /** Whether this outage has already produced its one escalation `error`
+   * log -- prevents re-logging `error` on every attempt past the
+   * threshold. */
+  private escalated = false;
+
+  /** When the current outage began, for the recovery log's duration. */
+  private outageStartedAt?: Date;
 
   private started = false;
 
@@ -159,6 +202,11 @@ export class AccountWatcher extends EventEmitter {
       options.WatcherClientCtor ?? (ImapFlow as unknown as WatcherClientConstructor);
     this.reconnectDelayMs =
       options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+    this.maxReconnectDelayMs =
+      options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_DELAY_MS;
+    this.reconnectFailureThreshold =
+      options.reconnectFailureThreshold ?? DEFAULT_RECONNECT_FAILURE_THRESHOLD;
+    this.random = options.random ?? Math.random;
     this.now = options.now ?? (() => new Date());
     this.logger = options.logger ?? noopLogger;
   }
@@ -206,6 +254,10 @@ export class AccountWatcher extends EventEmitter {
     this.mailboxUidWatermarks.clear();
     this.mailboxUidValidity.clear();
     this.pendingEnrichment = undefined;
+    this.consecutiveFailures = 0;
+    this.reconnectAttempts = 0;
+    this.escalated = false;
+    this.outageStartedAt = undefined;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -368,8 +420,12 @@ export class AccountWatcher extends EventEmitter {
           await this.openActiveMailbox();
           this.beginIdle();
         } catch (error) {
-          this.logger.error(
-            error,
+          // Debug, not error: this is a connection drop like any other --
+          // the reconnect-supervision escalation policy (see
+          // handleReconnectFailure) is what decides whether it's worth an
+          // `error` log, not the event that triggered it.
+          this.logger.debug(
+            { accountId: this.account.id, err: toError(error) },
             `Failed to open mailbox for account "${this.account.id}"`
           );
           this.handleConnectionDrop();
@@ -380,8 +436,8 @@ export class AccountWatcher extends EventEmitter {
           return;
         }
 
-        this.logger.error(
-          error,
+        this.logger.debug(
+          { accountId: this.account.id, err: toError(error) },
           `IDLE loop failed for account "${this.account.id}"`
         );
         this.handleConnectionDrop();
@@ -538,6 +594,25 @@ export class AccountWatcher extends EventEmitter {
     this.handleConnectionDrop();
   };
 
+  /** Registered on every client so a socket error never reaches Node's
+   * uncaught-exception handler (EventEmitter rethrows an `error` event with
+   * no listener). `close` usually follows `error` -- handleConnectionDrop
+   * is idempotent for that ordering: it nulls `this.client` and detaches
+   * listeners synchronously, so a `close` that fires right after finds
+   * nothing left to tear down and the `reconnectTimer` guard stops it from
+   * scheduling a second reconnect. */
+  private handleError = (error: unknown): void => {
+    if (!this.started) {
+      return;
+    }
+
+    this.logger.debug(
+      { accountId: this.account.id, err: toError(error), code: errorCode(error) },
+      `IMAP connection error for account "${this.account.id}"`
+    );
+    this.handleConnectionDrop();
+  };
+
   private handleConnectionDrop(): void {
     const client = this.client;
     this.client = undefined;
@@ -556,6 +631,11 @@ export class AccountWatcher extends EventEmitter {
       return;
     }
 
+    if (this.outageStartedAt == null) {
+      this.outageStartedAt = this.now();
+    }
+
+    const delay = this.computeBackoffDelay(this.reconnectAttempts + 1);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (!this.started) {
@@ -563,20 +643,82 @@ export class AccountWatcher extends EventEmitter {
       }
 
       void this.reconnect();
-    }, this.reconnectDelayMs);
+    }, delay);
+  }
+
+  /** Exponential backoff (base `reconnectDelayMs`, doubling per attempt,
+   * capped at `maxReconnectDelayMs`) with full jitter -- the delay is drawn
+   * uniformly from [0, cap] rather than added on top of it, so a fleet of
+   * watchers reconnecting after a shared outage don't retry in lockstep. */
+  private computeBackoffDelay(attempt: number): number {
+    const exponential = this.reconnectDelayMs * 2 ** (attempt - 1);
+    const capped = Math.min(exponential, this.maxReconnectDelayMs);
+    return Math.round(this.random() * capped);
   }
 
   private async reconnect(): Promise<void> {
+    this.reconnectAttempts += 1;
+    const attempt = this.reconnectAttempts;
     this.emit('reconnecting');
+    this.logger.debug(
+      { accountId: this.account.id, attempt },
+      `Reconnect attempt ${attempt} for account "${this.account.id}"`
+    );
+
     try {
       await this.connectAndWatch();
+      this.handleReconnectSuccess(attempt);
     } catch (error) {
-      this.logger.warn(
-        error,
-        `Failed to reconnect watcher for account "${this.account.id}"`
-      );
-      this.handleConnectionDrop();
+      this.handleReconnectFailure(toError(error), attempt);
     }
+  }
+
+  /** Resets the failure/outage state and, if this reconnect actually ended
+   * an outage, logs one `info` line naming how long it lasted and how many
+   * attempts it took -- the "dropped, back after 3s, 2 attempts" record an
+   * operator can read after the fact instead of either silence or a stack
+   * trace. */
+  private handleReconnectSuccess(attempt: number): void {
+    const outageStartedAt = this.outageStartedAt;
+    this.consecutiveFailures = 0;
+    this.escalated = false;
+    this.reconnectAttempts = 0;
+    this.outageStartedAt = undefined;
+
+    if (outageStartedAt == null) {
+      return;
+    }
+
+    const durationMs = this.now().getTime() - outageStartedAt.getTime();
+    this.logger.info(
+      { accountId: this.account.id, attempts: attempt, durationMs },
+      `Watcher for account "${this.account.id}" reconnected after ${durationMs}ms and ${attempt} attempt(s)`
+    );
+  }
+
+  /** Logs each failed attempt at `debug`, and escalates to exactly one
+   * `error` per outage once `reconnectFailureThreshold` consecutive
+   * failures are reached -- `escalated` prevents re-logging `error` on
+   * every attempt past that point. Always reschedules via
+   * handleConnectionDrop, which applies the next backoff delay. */
+  private handleReconnectFailure(error: Error, attempt: number): void {
+    this.consecutiveFailures += 1;
+    const code = errorCode(error);
+
+    this.logger.debug(
+      { accountId: this.account.id, attempt, code, err: error },
+      `Reconnect attempt ${attempt} failed for account "${this.account.id}"`
+    );
+
+    if (!this.escalated && this.consecutiveFailures >= this.reconnectFailureThreshold) {
+      this.escalated = true;
+      this.logger.error(
+        { accountId: this.account.id, attempts: this.consecutiveFailures, code, err: error },
+        `Watcher for account "${this.account.id}" failed to reconnect after ${this.consecutiveFailures} consecutive attempts`
+      );
+    }
+
+    this.handleConnectionDrop();
   }
 
   private attachClientListeners(client: WatcherClient): void {
@@ -584,6 +726,7 @@ export class AccountWatcher extends EventEmitter {
     client.on('flags', this.handleFlags);
     client.on('expunge', this.handleExpunge);
     client.on('close', this.handleClose);
+    client.on('error', this.handleError);
   }
 
   private detachClientListeners(client: WatcherClient): void {
@@ -591,5 +734,6 @@ export class AccountWatcher extends EventEmitter {
     client.off('flags', this.handleFlags);
     client.off('expunge', this.handleExpunge);
     client.off('close', this.handleClose);
+    client.off('error', this.handleError);
   }
 }

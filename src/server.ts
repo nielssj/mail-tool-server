@@ -74,7 +74,7 @@ const start = async (): Promise<void> => {
   const config = loadConfig();
   const { accounts, objectStorage } = config;
 
-  const watchers = accounts.map((account) => new AccountWatcher(account));
+  const watchers = accounts.map((account) => new AccountWatcher(account, { logger }));
   const MailboxClientCtor = withConnectionMetrics(
     ImapFlow as unknown as MailboxClientConstructor
   );
