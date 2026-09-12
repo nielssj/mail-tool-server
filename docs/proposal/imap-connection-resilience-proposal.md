@@ -161,16 +161,20 @@ thresholds as constructor options so they stay testable and tunable:
 - **Consecutive-failure threshold.** Reconnect attempts log at `debug`;
   after `N` consecutive failed attempts (default in the 5-ish range,
   spanning ~1 minute with the backoff below), escalate to one `error`.
-- **Flap window.** If a connection drops again within `W` of the previous
-  successful reconnect (default ~5 minutes), the connection is flapping
-  rather than healing. Escalate to `error` after `M` drops inside `W`. This
-  is the "within a reasonable short time frame after another" condition from
-  the request.
-- **Recovery.** A reconnect that succeeds and survives `W` resets both
-  counters and logs a single `info` recovery line naming the outage
-  duration and attempt count — so an operator reading the log after the fact
-  sees one tidy "dropped, back after 3s, 2 attempts" record instead of
-  either silence or a stack trace.
+- **Recovery.** A reconnect that succeeds resets the counter and logs a
+  single `info` recovery line naming the outage duration and attempt count
+  — so an operator reading the log after the fact sees one tidy "dropped,
+  back after 3s, 2 attempts" record instead of either silence or a stack
+  trace.
+
+**Deliberately not included: in-process flap detection.** An earlier draft
+proposed a second escalation rule — "M drops inside window W" — to catch a
+connection that reconnects successfully but keeps dropping. That rule is
+dropped; see "Why flap detection stays out of the process" below. The
+consecutive-failure counter stays, because it is effectively free (the
+backoff schedule already has to track the attempt number) and because it
+describes something no scraped metric can see: whether the retry loop is
+currently stuck.
 - Steady-state, the once-a-week ECONNRESET produces **one `info` line and
   zero `error` lines**, and Grafana stays quiet.
 
@@ -190,13 +194,67 @@ means future watcher failures stop being invisible.
 
 #### 5. Keep metrics, not logs, as the alerting substrate
 
-`mailtool.watcher.reconnects` and `mailtool.watcher.connection.state`
-already exist. Once the crash is fixed they become continuously meaningful
-(today they reset on every crash). The recommendation is to alert on
-`connection.state == 0` sustained over a few minutes, or on reconnect rate,
-and to let the log-based alert group serve only the escalated `error` case.
+`mailtool_watcher_reconnects_total` and `mailtool_watcher_connection_state`
+are already being scraped into Grafana Cloud Prometheus (verified against
+`grafanacloud-prom`; both carry an `account_id` label). Once the crash is
+fixed they become continuously meaningful — today they reset on every
+crash, which is plainly visible in the series.
+
+**Alert on the reconnect counter, not on the connection-state gauge.** The
+gauge queried over five days at 5-minute resolution is a flat, unbroken
+`1` — it never once records a drop, because drops heal in about a second
+and fall entirely between scrapes. A `connection_state == 0` alert would
+essentially never fire for this failure mode. The counter, by contrast,
+captures every drop regardless of duration, and the burst structure is
+already legible in it (see below). The recommended rule is therefore on
+`increase(mailtool_watcher_reconnects_total[30m])`, with the log-based
+alert group left to serve only the escalated `error` case.
+
 Worth a short follow-up note in `docs/metrics.md`; the Grafana-side alert
-rule change is out of scope for this repo.
+rule change itself is out of scope for this repo.
+
+### Why flap detection stays out of the process
+
+The reconnect counter over the last 14 days settles the question. Reading
+`mailtool_watcher_reconnects_total` for `account_id="inbox"`:
+
+| Window | Counter | Reading |
+| --- | --- | --- |
+| ~2026-08-27 | `54` → `58` | **4 reconnects inside one hour** — a burst |
+| next ~40h | flat at `58` | healthy |
+| 2026-08-30 21:00 | resets to `6` | crash (counter restarts) |
+| 2026-08-30 → 09-07 | `6` → `15` | 9 drops over ~8 days, all healed |
+| 2026-09-07 22:17 | resets to `4` | crash |
+
+Two things follow. First, drops that heal are **already routine** — dozens
+between crashes — so they were never going to be a useful error signal in
+the first place. Second, the flapping condition that in-process detection
+was meant to catch is *already fully visible in the metric*: the
+`54 → 58`-in-an-hour burst is exactly "M drops inside W", expressed in the
+system that is designed to express it.
+
+So the honest answer to whether the in-process rule earns its complexity,
+given section 5: **no.** Concretely, it would cost the watcher a timestamp
+ring buffer, a separate "stable for W" recovery timer, reset semantics that
+interact with the consecutive-failure counter, and a set of tests for the
+interaction between the two — while duplicating a query that is one line of
+PromQL:
+
+```promql
+increase(mailtool_watcher_reconnects_total[30m]) > 5
+```
+
+The PromQL version is also strictly better on three counts: the threshold
+is tunable without a redeploy, it is evaluated across accounts and pods
+rather than per-process, and it survives a restart (`increase()` handles
+counter resets, which — as the table above shows — this series genuinely
+has).
+
+The consecutive-failure threshold is a different case and stays. It gates
+the `error` log, it needs only an integer the backoff loop already
+maintains, and it distinguishes "the retry loop is stuck right now" from
+"reconnected fine" — a distinction a 60-second scrape cannot draw when the
+event it is trying to see lasts one second.
 
 ### Open question for review
 
@@ -223,8 +281,9 @@ process-wide.
   `error: (err: Error) => void`.
 - Verify/repair `handleConnectionDrop()` idempotency for the
   error-then-close event ordering so one drop schedules one reconnect.
-- Add reconnect supervision: consecutive-failure counter, flap window,
-  recovery reset; thresholds exposed via `AccountWatcherOptions`.
+- Add reconnect supervision: a consecutive-failure counter with an
+  escalation threshold, reset on a successful reconnect; threshold exposed
+  via `AccountWatcherOptions`. No flap window — see the section above.
 - Replace the fixed `reconnectDelayMs` with exponential backoff + jitter,
   configurable and injectable for tests.
 - Emit `debug` per attempt, one `error` on escalation, one `info` on
@@ -239,7 +298,8 @@ process-wide.
 - An `error` emitted by the mock client no longer propagates as an uncaught
   exception and triggers exactly one reconnect cycle.
 - A single transient drop logs zero `error` lines.
-- Escalation fires on both the consecutive-failure and flap-window paths.
+- Escalation fires after the configured number of consecutive failures and
+  resets on a successful reconnect.
 - `npm run lint`, `npx tsc --noEmit` and `npm test` pass.
 
 #### Task 2 — Error handling for short-lived operation clients
@@ -266,7 +326,10 @@ process-wide.
 - Document the new reconnect/escalation behaviour and its tunables in
   `README.md`.
 - Add a short "alerting on watcher connectivity" note to `docs/metrics.md`
-  recommending the metric-based alert over the log-based one.
+  recommending the metric-based alert over the log-based one, with the
+  `increase(mailtool_watcher_reconnects_total[30m])` rule and an explicit
+  warning that `connection_state` is too coarse to catch second-long drops
+  between scrapes.
 
 **Acceptance criteria:**
 - Docs describe the thresholds, the backoff schedule, and which log level
