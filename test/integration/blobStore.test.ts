@@ -8,8 +8,12 @@ import type { ObjectStorageConfig } from '../../src/utils/config/schema.js';
 // pre-signed URL minted by our blobStore actually round-trips real bytes
 // over HTTP against a real S3-API server (not just a mocked SDK client).
 // Pinned tag (not :latest) for reproducibility, matching the GreenMail
-// integration test's convention.
-const MINIO_IMAGE = 'minio/minio:RELEASE.2024-01-16T16-07-38Z';
+// integration test's convention. Pulled from quay.io, not Docker Hub:
+// MinIO stopped distributing container images via Docker Hub (the
+// minio/minio repository there now 404s on every pull -- unrelated to this
+// repo, a well-documented upstream change), and continues publishing the
+// same tags to quay.io/minio/minio.
+const MINIO_IMAGE = 'quay.io/minio/minio:RELEASE.2024-01-16T16-07-38Z';
 const MINIO_PORT = 9000;
 const BUCKET = 'mail-tool-blobs-it';
 const ACCESS_KEY_ID = 'minioadmin';
