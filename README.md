@@ -288,30 +288,19 @@ the message landed. True cross-folder move tracking is out of scope; treat
 
 ## IMAP connection resilience
 
-A long-lived IDLE connection eventually gets dropped by a NAT gateway or the
-mail provider — this is normal, not an outage, and is handled without
-restarting the process:
+A long-lived IDLE connection can be dropped at any time by a NAT gateway or
+the mail provider. Every IMAP client — the watcher's long-lived connection
+and the short-lived clients used per API/MCP operation — registers an
+`error` listener, so a socket reset fails only the in-flight operation (or,
+for the watcher, triggers a reconnect) instead of crashing the process.
 
-- **Every account watcher registers an `error` listener** on its IMAP
-  connection (`src/imap/watcher.ts`), so a socket reset (e.g. `ECONNRESET`)
-  is routed into the same reconnect path a clean `close` takes, instead of
-  crashing the process — Node rethrows an unlistened `EventEmitter` `error`
-  event as a fatal, uncaught exception, which is what a dropped IDLE
-  connection used to do here roughly once a week. The same protection is in
-  place for the short-lived clients `mailboxService.ts` and
-  `clientFactory.ts` create per API/MCP operation: a mid-operation reset
-  fails that one request instead of taking down the server.
-- **Reconnects back off exponentially, with jitter**, instead of retrying
-  once a second: the delay is drawn uniformly from `[0, min(base * 2^(attempt
-  - 1), cap)]`, so a fleet of watchers recovering from a shared outage
-  doesn't hammer the server in lockstep.
-- **A single drop that heals stays quiet.** Reconnect attempts log at
-  `debug`. Only after a configurable number of *consecutive* failed
-  attempts does the watcher log one `error` line; a later successful
-  reconnect logs one `info` line naming how long the outage lasted and how
-  many attempts it took, and resets the failure count. In steady state, the
-  weekly transient drop now produces one `info` line and zero `error`
-  lines.
+The watcher reconnects with exponential backoff and jitter (capped), so a
+sustained outage doesn't hammer the server and a fleet of watchers
+recovering together doesn't retry in lockstep. Reconnect attempts log at
+`debug`; only after a configurable number of consecutive failed attempts
+does the watcher log one `error` line, and a successful reconnect logs one
+`info` line with the outage duration and attempt count, resetting the
+failure count.
 
 | `AccountWatcher` option     | Default    | Description                                                                 |
 | ---------------------------- | ---------- | ---------------------------------------------------------------------------- |
@@ -321,14 +310,6 @@ restarting the process:
 
 These are constructor options (not yet exposed through `config.json`);
 `server.ts` uses the defaults above for every account.
-
-As a last resort, `server.ts` also installs `process.on('uncaughtException'
-/ 'unhandledRejection')` handlers (`src/utils/fatalErrorHandlers.ts`) that
-log the failure through pino at `fatal` before exiting — the exit behavior
-is unchanged from Node's own default (print and exit `1`), only what lands
-in the logs changes: a structured JSON line instead of a raw, multi-line
-stderr dump that Loki's error-detection heuristic used to misclassify as a
-burst of unrelated `error` lines.
 
 See [`docs/metrics.md`](docs/metrics.md#alerting-on-watcher-connectivity)
 for why alerting on this should target the reconnect-count metric rather
