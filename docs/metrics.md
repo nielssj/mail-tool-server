@@ -95,3 +95,33 @@ Every histogram above uses OTel SDK default bucket boundaries — no explicit
 (`mailtool.blobstore.stage.bytes`), where mail attachment sizes are unlikely
 to match generic defaults well. Revisit once real traffic/attachment-size
 data exists, rather than guessing boundaries now.
+
+## Alerting on watcher connectivity
+
+Alert on `mailtool_watcher_reconnects_total`, not on
+`mailtool_watcher_connection_state`:
+
+```promql
+increase(mailtool_watcher_reconnects_total[30m]) > 5
+```
+
+**`connection_state` is too coarse to catch this failure mode.** A dropped
+IDLE connection heals in about a second — well within one scrape interval —
+so at typical (e.g. 5-minute) scrape resolution the gauge reads a flat,
+unbroken `1` and a `connection_state == 0` alert essentially never fires,
+even while reconnects are actively happening. The reconnect counter, by
+contrast, captures every drop regardless of how briefly it lasted, and
+`increase()` handles the counter resetting to zero on a process restart —
+which this series does experience (see
+[`docs/proposal/imap-connection-resilience-proposal.md`](proposal/imap-connection-resilience-proposal.md)
+for the incident this was written against). A burst of several reconnects
+inside the window is also the signal for a connection that keeps dropping
+even though each individual drop heals — there's no need for a separate
+in-process "flap detection" feature; this is that check, expressed in the
+system built for it.
+
+The log-based `error` line (see the watcher's reconnect-escalation policy
+in the main [README](../README.md#imap-connection-resilience)) is a
+secondary, complementary signal — it means the retry loop is currently
+stuck, not merely that a drop occurred — and should not be the primary
+alert for connectivity health.

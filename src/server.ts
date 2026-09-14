@@ -3,6 +3,7 @@ import { ImapFlow } from 'imapflow';
 import { buildApp } from './app.js';
 import { loadConfig } from './utils/config/load.js';
 import { createLogger } from './utils/logger.js';
+import { installFatalErrorHandlers } from './utils/fatalErrorHandlers.js';
 import { AccountWatcher } from './imap/watcher.js';
 import { createDispatcher, subscribeWatcher } from './events/dispatcher.js';
 import {
@@ -29,6 +30,7 @@ const mcpEnabled = process.env.MCP_ENABLED !== 'false';
 const accessLogEnabled = process.env.ACCESS_LOG_ENABLED !== 'false';
 
 const logger = createLogger();
+installFatalErrorHandlers(logger);
 
 type HttpApp = Awaited<ReturnType<typeof buildApp>>;
 
@@ -74,7 +76,7 @@ const start = async (): Promise<void> => {
   const config = loadConfig();
   const { accounts, objectStorage } = config;
 
-  const watchers = accounts.map((account) => new AccountWatcher(account));
+  const watchers = accounts.map((account) => new AccountWatcher(account, { logger }));
   const MailboxClientCtor = withConnectionMetrics(
     ImapFlow as unknown as MailboxClientConstructor
   );

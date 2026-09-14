@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { describe, it, expect, vi } from 'vitest';
 import {
@@ -93,7 +94,9 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
     overrides.append ?? (() => Promise.resolve({ destination: 'Drafts' }))
   );
 
-  class MockMailboxClient {
+  const instances: MockMailboxClient[] = [];
+
+  class MockMailboxClient extends EventEmitter {
     connect = connect;
     logout = logout;
     list = list;
@@ -105,6 +108,11 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
     messageFlagsAdd = messageFlagsAdd;
     messageFlagsRemove = messageFlagsRemove;
     append = append;
+
+    constructor() {
+      super();
+      instances.push(this);
+    }
   }
 
   const ctor = MockMailboxClient as unknown as MailboxClientConstructor;
@@ -121,7 +129,8 @@ const buildMockCtor = (overrides: MockClientOverrides = {}) => {
     messageMove,
     messageFlagsAdd,
     messageFlagsRemove,
-    append
+    append,
+    instances
   };
 };
 
@@ -673,6 +682,35 @@ describe('createMailboxService', () => {
       await expect(service.createDraft('missing', 'Drafts', {})).rejects.toThrow(
         /Unknown account id/
       );
+    });
+  });
+
+  describe('mid-operation socket errors', () => {
+    it('rejects the in-flight operation with ImapConnectionError and still logs out, instead of crashing', async () => {
+      // fetchAll never resolves on its own -- the only way this operation
+      // settles is via the socket's 'error' event, same as a real
+      // mid-operation ECONNRESET would leave a pending IMAP command.
+      const fetchAll = vi.fn(() => new Promise<FetchMessageObject[]>(() => undefined));
+      const { ctor, instances, logout } = buildMockCtor({ fetchAll });
+      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
+
+      const pending = service.listMessages('acc-1', 'INBOX');
+
+      await vi.waitFor(() => {
+        if (fetchAll.mock.calls.length < 1) {
+          throw new Error('waiting for fetchAll to be called');
+        }
+      });
+
+      // ImapFlow (an EventEmitter) rethrows an 'error' event with no
+      // listener as an uncaught exception -- this only completes safely if
+      // mailboxService registered one.
+      expect(() =>
+        instances[0]?.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+      ).not.toThrow();
+
+      await expect(pending).rejects.toBeInstanceOf(ImapConnectionError);
+      expect(logout).toHaveBeenCalledTimes(1);
     });
   });
 });

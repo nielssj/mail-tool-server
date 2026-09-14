@@ -286,6 +286,35 @@ perspective a move is indistinguishable from a deletion, so a move emits a
 the message landed. True cross-folder move tracking is out of scope; treat
 `mailRemoved` as "gone from this mailbox," not necessarily "deleted."
 
+## IMAP connection resilience
+
+A long-lived IDLE connection can be dropped at any time by a NAT gateway or
+the mail provider. Every IMAP client — the watcher's long-lived connection
+and the short-lived clients used per API/MCP operation — registers an
+`error` listener, so a socket reset fails only the in-flight operation (or,
+for the watcher, triggers a reconnect) instead of crashing the process.
+
+The watcher reconnects with exponential backoff and jitter (capped), so a
+sustained outage doesn't hammer the server and a fleet of watchers
+recovering together doesn't retry in lockstep. Reconnect attempts log at
+`debug`; only after a configurable number of consecutive failed attempts
+does the watcher log one `error` line, and a successful reconnect logs one
+`info` line with the outage duration and attempt count, resetting the
+failure count.
+
+| `AccountWatcher` option     | Default    | Description                                                                 |
+| ---------------------------- | ---------- | ---------------------------------------------------------------------------- |
+| `reconnectDelayMs`            | `1000`     | Base delay for the exponential backoff.                                      |
+| `maxReconnectDelayMs`         | `30000`    | Cap on the backed-off reconnect delay.                                       |
+| `reconnectFailureThreshold`   | `5`        | Consecutive failed reconnect attempts before escalating to one `error` log.   |
+
+These are constructor options (not yet exposed through `config.json`);
+`server.ts` uses the defaults above for every account.
+
+See [`docs/metrics.md`](docs/metrics.md#alerting-on-watcher-connectivity)
+for why alerting on this should target the reconnect-count metric rather
+than the log-based `error` line or the connection-state gauge.
+
 ## Metrics
 
 The server instruments itself with [OpenTelemetry](https://opentelemetry.io/)

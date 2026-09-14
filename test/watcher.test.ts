@@ -209,7 +209,7 @@ describe('AccountWatcher', () => {
     const fetchAll = vi.fn(
       () => Promise.reject(new Error('down')) as Promise<Array<{ uid: number }>>
     );
-    const logger = { warn: vi.fn(), error: vi.fn() };
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const { ctor, instances } = buildWatcherCtor({
       mailboxOpen: () =>
         Promise.resolve({ exists: 2, uidNext: 3, uidValidity: 1n }),
@@ -482,6 +482,156 @@ describe('AccountWatcher', () => {
     expect(reconnecting).toHaveBeenCalledTimes(1);
 
     await watcher.stop();
+  });
+
+  describe('reconnect supervision', () => {
+    it('handles a client "error" event without crashing, and reconnects exactly once even when "close" follows', async () => {
+      vi.useFakeTimers();
+
+      const { ctor, connect, instances } = buildWatcherCtor();
+      const watcher = new AccountWatcher(ACCOUNT, {
+        WatcherClientCtor: ctor,
+        reconnectDelayMs: 25,
+        random: () => 1
+      });
+
+      await watcher.start();
+      expect(instances).toHaveLength(1);
+
+      // ImapFlow (an EventEmitter) rethrows an 'error' event with no
+      // listener as an uncaught exception -- this only completes safely if
+      // the watcher registered one. 'close' usually follows 'error', so
+      // this also proves handleConnectionDrop's idempotency for that
+      // ordering: exactly one reconnect, not two.
+      expect(() => {
+        instances[0]?.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+        instances[0]?.emit('close');
+      }).not.toThrow();
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(instances).toHaveLength(2);
+
+      await watcher.stop();
+    });
+
+    it('logs zero error lines and exactly one info line for a single drop that heals', async () => {
+      vi.useFakeTimers();
+
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const { ctor, instances } = buildWatcherCtor();
+      const watcher = new AccountWatcher(ACCOUNT, {
+        WatcherClientCtor: ctor,
+        reconnectDelayMs: 25,
+        random: () => 1,
+        logger
+      });
+
+      await watcher.start();
+      instances[0]?.emit('close');
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledTimes(1);
+
+      await watcher.stop();
+    });
+
+    it('escalates to exactly one error log after the consecutive-failure threshold, recovers with one info log, and resets for the next outage', async () => {
+      vi.useFakeTimers();
+
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      let calls = 0;
+      const { ctor, instances } = buildWatcherCtor({
+        connect: () => {
+          calls += 1;
+          // Call 1: initial start succeeds. Calls 2-4: three consecutive
+          // reconnect failures -- exactly the configured threshold. Call 5
+          // recovers.
+          if (calls === 1 || calls >= 5) {
+            return Promise.resolve();
+          }
+          return Promise.reject(new Error('ECONNRESET'));
+        }
+      });
+      const watcher = new AccountWatcher(ACCOUNT, {
+        WatcherClientCtor: ctor,
+        reconnectDelayMs: 10,
+        maxReconnectDelayMs: 1_000,
+        reconnectFailureThreshold: 3,
+        random: () => 1,
+        logger
+      });
+
+      await watcher.start();
+      instances[0]?.emit('close');
+
+      await vi.advanceTimersByTimeAsync(10); // attempt 1 (call 2) fails
+      await vi.advanceTimersByTimeAsync(20); // attempt 2 (call 3) fails
+      await vi.advanceTimersByTimeAsync(40); // attempt 3 (call 4) fails -- hits the threshold
+      await vi.advanceTimersByTimeAsync(80); // attempt 4 (call 5) recovers
+
+      expect(instances).toHaveLength(5);
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: 'acc-1', attempts: 3 }),
+        expect.any(String)
+      );
+      expect(logger.info).toHaveBeenCalledTimes(1);
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: 'acc-1', attempts: 4 }),
+        expect.any(String)
+      );
+
+      // A second, single drop after recovery must not immediately
+      // re-escalate -- the failure counter reset on the successful
+      // reconnect above, so it again needs the full threshold.
+      instances[instances.length - 1]?.emit('close');
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.info).toHaveBeenCalledTimes(2);
+
+      await watcher.stop();
+    });
+
+    it('grows the backoff delay exponentially per attempt and caps it at maxReconnectDelayMs', async () => {
+      vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+
+      let calls = 0;
+      const { ctor, instances } = buildWatcherCtor({
+        connect: () => {
+          calls += 1;
+          return calls === 1 ? Promise.resolve() : Promise.reject(new Error('down'));
+        }
+      });
+      const watcher = new AccountWatcher(ACCOUNT, {
+        WatcherClientCtor: ctor,
+        reconnectDelayMs: 100,
+        maxReconnectDelayMs: 350,
+        reconnectFailureThreshold: 100,
+        random: () => 1
+      });
+
+      await watcher.start();
+      setTimeoutSpy.mockClear();
+      instances[0]?.emit('close');
+
+      await vi.advanceTimersByTimeAsync(100); // attempt 1: 100 * 2^0 = 100
+      await vi.advanceTimersByTimeAsync(200); // attempt 2: 100 * 2^1 = 200
+      await vi.advanceTimersByTimeAsync(350); // attempt 3: 100 * 2^2 = 400, capped to 350
+      await vi.advanceTimersByTimeAsync(350); // attempt 4: 100 * 2^3 = 800, capped to 350
+
+      // The last advance's failed attempt schedules one further timer
+      // (also capped) that never gets a chance to fire within this test --
+      // only the first four entries reflect timers that actually ran.
+      const delays = setTimeoutSpy.mock.calls.map(([, ms]) => ms).slice(0, 4);
+      expect(delays).toEqual([100, 200, 350, 350]);
+
+      await watcher.stop();
+    });
   });
 
   describe('isConnected', () => {
