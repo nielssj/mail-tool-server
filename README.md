@@ -306,7 +306,7 @@ failure count.
 | ---------------------------- | ---------- | ---------------------------------------------------------------------------- |
 | `reconnectDelayMs`            | `1000`     | Base delay for the exponential backoff.                                      |
 | `maxReconnectDelayMs`         | `30000`    | Cap on the backed-off reconnect delay.                                       |
-| `reconnectFailureThreshold`   | `5`        | Consecutive failed reconnect attempts before escalating to one `error` log.   |
+| `reconnectFailureThreshold`   | `20`       | Consecutive failed reconnect attempts before escalating to one `error` log.   |
 
 These are constructor options (not yet exposed through `config.json`);
 `server.ts` uses the defaults above for every account.
