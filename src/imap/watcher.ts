@@ -114,7 +114,14 @@ type AccountWatcherEvents = {
 
 const DEFAULT_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_MAX_RECONNECT_DELAY_MS = 30_000;
-const DEFAULT_RECONNECT_FAILURE_THRESHOLD = 5;
+/** A live outage (2026-09-16, account "inbox", ClosedAfterConnectTLS) self-
+ * healed after 9 attempts / ~107s -- past the old default of 5 (~15s avg,
+ * ~31s worst case with full jitter), which meant a routine, already-healing
+ * outage produced an `error` line. 20 keeps the same bounded escalation
+ * (still fires on a genuinely stuck connection) but only after ~4min avg /
+ * ~8min worst case, comfortably past what a self-healing blip has taken so
+ * far. */
+const DEFAULT_RECONNECT_FAILURE_THRESHOLD = 20;
 /** Matches webhookDispatcher.ts's existing MAX_ATTEMPTS convention rather
  * than inventing a new retry policy for this second, unrelated call site. */
 const FETCH_UID_ATTEMPTS = 2;

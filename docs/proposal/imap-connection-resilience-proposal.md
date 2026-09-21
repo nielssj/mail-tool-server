@@ -159,8 +159,13 @@ Add a small reconnect-supervision state machine to `AccountWatcher`, with
 thresholds as constructor options so they stay testable and tunable:
 
 - **Consecutive-failure threshold.** Reconnect attempts log at `debug`;
-  after `N` consecutive failed attempts (default in the 5-ish range,
-  spanning ~1 minute with the backoff below), escalate to one `error`.
+  after `N` consecutive failed attempts, escalate to one `error`. Shipped
+  with a default of 5 (~15s avg / ~31s worst case with the backoff below).
+  Recalibrated to 20 (~4min avg / ~8min worst case) after a live outage
+  (2026-09-16, account "inbox", `ClosedAfterConnectTLS`) needed 9 attempts
+  and ~107s to self-heal — past the old threshold, so a routine,
+  already-recovering blip was logging `error` and tripping the namespace
+  error-rate alert for something that caused no disruption.
 - **Recovery.** A reconnect that succeeds resets the counter and logs a
   single `info` recovery line naming the outage duration and attempt count
   — so an operator reading the log after the fact sees one tidy "dropped,
