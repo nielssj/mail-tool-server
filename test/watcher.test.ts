@@ -443,6 +443,25 @@ describe('AccountWatcher', () => {
     await watcher.stop();
   });
 
+  it('does not crash on an error emitted after connect() has already rejected', async () => {
+    // Production crash-loop: the server closes the socket mid-handshake,
+    // connect() rejects ("Unexpected close"), the failure path detaches the
+    // watcher's listeners, then ImapFlow's detached startSession() chain
+    // emits 'error' on the discarded client.
+    const { ctor, instances } = buildWatcherCtor({
+      connect: () => Promise.reject(new Error('Unexpected close'))
+    });
+    const watcher = new AccountWatcher(ACCOUNT, { WatcherClientCtor: ctor });
+
+    await expect(watcher.start()).rejects.toThrow('Unexpected close');
+
+    expect(() =>
+      instances[0]?.emit('error', new Error('Already logged out'))
+    ).not.toThrow();
+
+    await watcher.stop();
+  });
+
   it('reconnects when the watcher connection closes', async () => {
     vi.useFakeTimers();
 

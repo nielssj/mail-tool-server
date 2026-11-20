@@ -11,7 +11,7 @@ import type {
 } from 'imapflow';
 import { createTransport } from 'nodemailer';
 import type { AccountConfig } from '../utils/config/schema.js';
-import { ImapConnectionError } from '../imap/clientFactory.js';
+import { ImapConnectionError, ignoreLateImapErrors } from '../imap/clientFactory.js';
 
 export type { ListResponse, FetchMessageObject };
 
@@ -239,14 +239,18 @@ const withClient = async <T>(
   ctor: MailboxClientConstructor,
   fn: (client: MailboxClient) => Promise<T>
 ): Promise<T> => {
-  const client = new ctor({
-    id: account.id,
-    host: account.host,
-    port: account.port,
-    secure: account.secure,
-    auth: { user: account.auth.user, pass: account.auth.pass },
-    logger: false
-  });
+  // Permanent sink so a late 'error' emitted after connect() has already
+  // rejected can't crash the process -- see ignoreLateImapErrors.
+  const client = ignoreLateImapErrors(
+    new ctor({
+      id: account.id,
+      host: account.host,
+      port: account.port,
+      secure: account.secure,
+      auth: { user: account.auth.user, pass: account.auth.pass },
+      logger: false
+    })
+  );
 
   try {
     await client.connect();

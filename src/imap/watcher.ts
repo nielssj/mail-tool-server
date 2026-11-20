@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { ImapFlow } from 'imapflow';
 import type { AccountConfig } from '../utils/config/schema.js';
+import { ignoreLateImapErrors } from './clientFactory.js';
 import type {
   FlagsChangedEvent,
   MailRemovedEvent,
@@ -299,16 +300,21 @@ export class AccountWatcher extends EventEmitter {
   }
 
   private async connectAndWatch(): Promise<void> {
-    const client = new this.WatcherClientCtor({
-      host: this.account.host,
-      port: this.account.port,
-      secure: this.account.secure,
-      auth: {
-        user: this.account.auth.user,
-        pass: this.account.auth.pass
-      },
-      logger: false
-    });
+    // The permanent sink keeps a late 'error' (emitted after connect() has
+    // already rejected) from crashing the process once the failure path
+    // below has detached handleError -- see ignoreLateImapErrors.
+    const client = ignoreLateImapErrors(
+      new this.WatcherClientCtor({
+        host: this.account.host,
+        port: this.account.port,
+        secure: this.account.secure,
+        auth: {
+          user: this.account.auth.user,
+          pass: this.account.auth.pass
+        },
+        logger: false
+      })
+    );
 
     this.attachClientListeners(client);
 
