@@ -7,13 +7,15 @@ import type { ObjectStorageConfig } from '../../src/utils/config/schema.js';
 // MinIO: S3-compatible object storage, used here purely to prove a
 // pre-signed URL minted by our blobStore actually round-trips real bytes
 // over HTTP against a real S3-API server (not just a mocked SDK client).
-// Pinned tag (not :latest) for reproducibility, matching the GreenMail
-// integration test's convention. Pulled from quay.io, not Docker Hub:
-// MinIO stopped distributing container images via Docker Hub (the
-// minio/minio repository there now 404s on every pull -- unrelated to this
-// repo, a well-documented upstream change), and continues publishing the
-// same tags to quay.io/minio/minio.
-const MINIO_IMAGE = 'quay.io/minio/minio:RELEASE.2024-01-16T16-07-38Z';
+// Pinned by digest for reproducibility, matching the GreenMail integration
+// test's convention of never floating on :latest. Pulled from Chainguard's
+// public registry: MinIO no longer serves its images anonymously from
+// either Docker Hub (minio/minio) or quay.io (quay.io/minio/minio both now
+// answer 401 to an unauthenticated pull), while cgr.dev/chainguard/minio
+// is a public, regularly rebuilt MinIO image whose entrypoint is the plain
+// `minio` binary, so the same `server /data` command works unchanged.
+const MINIO_IMAGE =
+  'cgr.dev/chainguard/minio@sha256:e9cf6b99c226e9539ed0f14b6f00e37b07da153c7ba1f4f8709c807574b471ec';
 const MINIO_PORT = 9000;
 const BUCKET = 'mail-tool-blobs-it';
 const ACCESS_KEY_ID = 'minioadmin';
