@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { ImapFlow } from 'imapflow';
+import { SafeImapFlow } from './safeImapFlow.js';
 import type { AccountConfig } from '../utils/config/schema.js';
 import type {
   FlagsChangedEvent,
@@ -206,7 +206,7 @@ export class AccountWatcher extends EventEmitter {
   ) {
     super();
     this.WatcherClientCtor =
-      options.WatcherClientCtor ?? (ImapFlow as unknown as WatcherClientConstructor);
+      options.WatcherClientCtor ?? (SafeImapFlow as unknown as WatcherClientConstructor);
     this.reconnectDelayMs =
       options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
     this.maxReconnectDelayMs =

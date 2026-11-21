@@ -1,4 +1,4 @@
-import { ImapFlow } from 'imapflow';
+import { SafeImapFlow } from '../imap/safeImapFlow.js';
 import type {
   ListResponse,
   FetchMessageObject,
@@ -419,7 +419,7 @@ export const createMailboxService = (
   options: MailboxServiceOptions = {}
 ): MailboxService => {
   const ctor =
-    options.MailboxClientCtor ?? (ImapFlow as unknown as MailboxClientConstructor);
+    options.MailboxClientCtor ?? (SafeImapFlow as unknown as MailboxClientConstructor);
 
   const listMailboxes = async (accountId: string): Promise<ListResponse[]> => {
     const account = findAccount(accounts, accountId);

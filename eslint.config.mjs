@@ -17,5 +17,27 @@ export default [
     rules: {
       '@typescript-eslint/no-explicit-any': 'off'
     }
+  },
+  {
+    // Constructing the bare ImapFlow class reintroduces the late-'error'
+    // crash SafeImapFlow guards against (see src/imap/safeImapFlow.ts).
+    // Type-only imports of it are fine.
+    files: ['src/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'imapflow',
+              importNames: ['ImapFlow'],
+              allowTypeImports: true,
+              message:
+                'Construct SafeImapFlow (src/imap/safeImapFlow.ts) instead, so a late error after a failed connect() cannot crash the process.'
+            }
+          ]
+        }
+      ]
+    }
   }
 ];

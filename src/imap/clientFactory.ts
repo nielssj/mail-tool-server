@@ -1,4 +1,4 @@
-import { ImapFlow } from 'imapflow';
+import { SafeImapFlow } from './safeImapFlow.js';
 import type { AccountConfig } from '../utils/config/schema.js';
 
 export class ImapConnectionError extends Error {
@@ -34,7 +34,7 @@ export const createConnectedImapClient = async (
   options: CreateConnectedImapClientOptions = {}
 ): Promise<{ client: ImapClient; close: () => Promise<void> }> => {
   const ImapClientCtor =
-    options.ImapClientCtor ?? (ImapFlow as ImapClientConstructor);
+    options.ImapClientCtor ?? (SafeImapFlow as ImapClientConstructor);
   const client = new ImapClientCtor({
     host: account.host,
     port: account.port,
