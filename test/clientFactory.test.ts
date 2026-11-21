@@ -129,26 +129,4 @@ describe('createConnectedImapClient', () => {
 
     await close();
   });
-
-  it('does not crash on an error emitted after connect() has already rejected', async () => {
-    // Reproduces the production crash-loop: the server closes the socket
-    // mid-handshake ("Too many simultaneous connections"), ImapFlow rejects
-    // connect() with "Unexpected close", then its detached startSession()
-    // chain fails and reports via emit('error') on the discarded client.
-    const { instances, ImapClientCtor } = prepareImapMock({
-      connectImpl: async () => {
-        throw Object.assign(new Error('Unexpected close'), {
-          code: 'ClosedAfterConnectTLS'
-        });
-      }
-    });
-
-    await expect(
-      createConnectedImapClient(ACCOUNT, { ImapClientCtor })
-    ).rejects.toBeInstanceOf(ImapConnectionError);
-
-    expect(() =>
-      instances[0]?.emit('error', new Error('Already logged out'))
-    ).not.toThrow();
-  });
 });

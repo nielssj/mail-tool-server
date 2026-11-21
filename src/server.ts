@@ -1,5 +1,5 @@
 import type { Server as HttpServer } from 'node:http';
-import { ImapFlow } from 'imapflow';
+import { SafeImapFlow } from './imap/safeImapFlow.js';
 import { buildApp } from './app.js';
 import { loadConfig } from './utils/config/load.js';
 import { createLogger } from './utils/logger.js';
@@ -78,7 +78,7 @@ const start = async (): Promise<void> => {
 
   const watchers = accounts.map((account) => new AccountWatcher(account, { logger }));
   const MailboxClientCtor = withConnectionMetrics(
-    ImapFlow as unknown as MailboxClientConstructor
+    SafeImapFlow as unknown as MailboxClientConstructor
   );
   const mailboxService = withMailboxOperationMetrics(
     createMailboxService(accounts, { MailboxClientCtor }),

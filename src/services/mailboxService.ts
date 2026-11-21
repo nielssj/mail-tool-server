@@ -1,4 +1,4 @@
-import { ImapFlow } from 'imapflow';
+import { SafeImapFlow } from '../imap/safeImapFlow.js';
 import type {
   ListResponse,
   FetchMessageObject,
@@ -11,7 +11,7 @@ import type {
 } from 'imapflow';
 import { createTransport } from 'nodemailer';
 import type { AccountConfig } from '../utils/config/schema.js';
-import { ImapConnectionError, ignoreLateImapErrors } from '../imap/clientFactory.js';
+import { ImapConnectionError } from '../imap/clientFactory.js';
 
 export type { ListResponse, FetchMessageObject };
 
@@ -239,18 +239,14 @@ const withClient = async <T>(
   ctor: MailboxClientConstructor,
   fn: (client: MailboxClient) => Promise<T>
 ): Promise<T> => {
-  // Permanent sink so a late 'error' emitted after connect() has already
-  // rejected can't crash the process -- see ignoreLateImapErrors.
-  const client = ignoreLateImapErrors(
-    new ctor({
-      id: account.id,
-      host: account.host,
-      port: account.port,
-      secure: account.secure,
-      auth: { user: account.auth.user, pass: account.auth.pass },
-      logger: false
-    })
-  );
+  const client = new ctor({
+    id: account.id,
+    host: account.host,
+    port: account.port,
+    secure: account.secure,
+    auth: { user: account.auth.user, pass: account.auth.pass },
+    logger: false
+  });
 
   try {
     await client.connect();
@@ -423,7 +419,7 @@ export const createMailboxService = (
   options: MailboxServiceOptions = {}
 ): MailboxService => {
   const ctor =
-    options.MailboxClientCtor ?? (ImapFlow as unknown as MailboxClientConstructor);
+    options.MailboxClientCtor ?? (SafeImapFlow as unknown as MailboxClientConstructor);
 
   const listMailboxes = async (accountId: string): Promise<ListResponse[]> => {
     const account = findAccount(accounts, accountId);

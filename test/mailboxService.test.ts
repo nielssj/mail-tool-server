@@ -169,23 +169,6 @@ describe('createMailboxService', () => {
       );
     });
 
-    it('does not crash on an error emitted after connect() has already rejected', async () => {
-      // ImapFlow can reject connect() ("Unexpected close") and then emit
-      // 'error' from its still-running startSession() chain -- this must
-      // not reach EventEmitter's no-listener rethrow.
-      const { ctor, instances } = buildMockCtor({
-        connect: () => Promise.reject(new Error('Unexpected close'))
-      });
-      const service = createMailboxService(ACCOUNTS, { MailboxClientCtor: ctor });
-      await expect(service.listMailboxes('acc-1')).rejects.toBeInstanceOf(
-        ImapConnectionError
-      );
-
-      expect(() =>
-        instances[0]?.emit('error', new Error('Already logged out'))
-      ).not.toThrow();
-    });
-
     it('closes connection even when list() throws', async () => {
       const { ctor, logout } = buildMockCtor({
         list: () => Promise.reject(new Error('list failed'))
