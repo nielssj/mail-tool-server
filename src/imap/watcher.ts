@@ -16,6 +16,9 @@ type WatcherClientOptions = {
     pass: string;
   };
   logger?: false;
+  /** Passed through to ImapFlow: break and re-issue IDLE every this many
+   * milliseconds. */
+  maxIdleTime?: number;
 };
 
 type MailboxOpenResult = {
@@ -97,6 +100,9 @@ export type AccountWatcherOptions = {
   /** Consecutive failed reconnect attempts before escalating to an `error`
    * log. Resets on the next successful reconnect. */
   reconnectFailureThreshold?: number;
+  /** Max duration of a single IMAP IDLE before it is ended and re-issued.
+   * See DEFAULT_MAX_IDLE_TIME_MS. */
+  maxIdleTimeMs?: number;
   now?: () => Date;
   logger?: WatcherLogger;
   /** Jitter source for the backoff delay, injectable for deterministic
@@ -122,6 +128,18 @@ const DEFAULT_MAX_RECONNECT_DELAY_MS = 30_000;
  * ~8min worst case, comfortably past what a self-healing blip has taken so
  * far. */
 const DEFAULT_RECONNECT_FAILURE_THRESHOLD = 20;
+/** How long one IMAP IDLE may run before ImapFlow ends it (DONE) and
+ * re-issues it. Without this, ImapFlow stays in a single IDLE indefinitely,
+ * and RFC 2177 says clients should re-issue IDLE at least every 29 minutes
+ * because servers may stop delivering notifications on long-lived IDLEs.
+ * A server that keeps the TCP connection alive with its own "still here"
+ * lines also keeps ImapFlow's 5-minute socket timeout from ever firing, so
+ * nothing else would notice -- the watcher stays "connected" but deaf
+ * (2026-11-20 to 2026-11-22: ~60h with no newMail events while mail
+ * arrived). Re-issuing IDLE also forces a DONE round-trip; on a dead
+ * socket that never gets its reply, the socket timeout fires, and the
+ * resulting error lands in the normal reconnect path. */
+const DEFAULT_MAX_IDLE_TIME_MS = 10 * 60 * 1000;
 /** Matches webhookDispatcher.ts's existing MAX_ATTEMPTS convention rather
  * than inventing a new retry policy for this second, unrelated call site. */
 const FETCH_UID_ATTEMPTS = 2;
@@ -151,6 +169,7 @@ export class AccountWatcher extends EventEmitter {
   private readonly maxReconnectDelayMs: number;
 
   private readonly reconnectFailureThreshold: number;
+  private readonly maxIdleTimeMs: number;
 
   private readonly random: () => number;
 
@@ -213,6 +232,7 @@ export class AccountWatcher extends EventEmitter {
       options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_DELAY_MS;
     this.reconnectFailureThreshold =
       options.reconnectFailureThreshold ?? DEFAULT_RECONNECT_FAILURE_THRESHOLD;
+    this.maxIdleTimeMs = options.maxIdleTimeMs ?? DEFAULT_MAX_IDLE_TIME_MS;
     this.random = options.random ?? Math.random;
     this.now = options.now ?? (() => new Date());
     this.logger = options.logger ?? noopLogger;
@@ -307,7 +327,8 @@ export class AccountWatcher extends EventEmitter {
         user: this.account.auth.user,
         pass: this.account.auth.pass
       },
-      logger: false
+      logger: false,
+      maxIdleTime: this.maxIdleTimeMs
     });
 
     this.attachClientListeners(client);

@@ -307,9 +307,18 @@ failure count.
 | `reconnectDelayMs`            | `1000`     | Base delay for the exponential backoff.                                      |
 | `maxReconnectDelayMs`         | `30000`    | Cap on the backed-off reconnect delay.                                       |
 | `reconnectFailureThreshold`   | `20`       | Consecutive failed reconnect attempts before escalating to one `error` log.   |
+| `maxIdleTimeMs`               | `600000`   | Max duration of one IMAP IDLE before it is ended and re-issued (see below).   |
 
 These are constructor options (not yet exposed through `config.json`);
 `server.ts` uses the defaults above for every account.
+
+`maxIdleTimeMs` guards against a connection that stays up but stops
+delivering notifications. RFC 2177 asks clients to re-issue IDLE at least
+every 29 minutes, since servers may stop notifying on long-lived IDLEs, and
+a server that keeps the socket busy with its own keep-alive lines never
+trips the client's socket timeout. Re-issuing IDLE every 10 minutes also
+forces a round-trip to the server, so a dead connection surfaces as a
+socket timeout and goes through the normal reconnect path.
 
 See [`docs/metrics.md`](docs/metrics.md#alerting-on-watcher-connectivity)
 for why alerting on this should target the reconnect-count metric rather

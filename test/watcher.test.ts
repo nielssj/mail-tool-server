@@ -443,6 +443,33 @@ describe('AccountWatcher', () => {
     await watcher.stop();
   });
 
+  it('passes a 10-minute maxIdleTime to the IMAP client by default, and honors an override', async () => {
+    const ctorOptions: unknown[] = [];
+    const { ctor: BaseCtor } = buildWatcherCtor();
+    const ctor = class extends (BaseCtor as unknown as new () => EventEmitter) {
+      constructor(options: unknown) {
+        super();
+        ctorOptions.push(options);
+      }
+    } as unknown as WatcherClientConstructor;
+
+    const defaultWatcher = new AccountWatcher(ACCOUNT, { WatcherClientCtor: ctor });
+    await defaultWatcher.start();
+    await defaultWatcher.stop();
+
+    const overrideWatcher = new AccountWatcher(ACCOUNT, {
+      WatcherClientCtor: ctor,
+      maxIdleTimeMs: 1234
+    });
+    await overrideWatcher.start();
+    await overrideWatcher.stop();
+
+    expect(ctorOptions).toEqual([
+      expect.objectContaining({ maxIdleTime: 10 * 60 * 1000 }),
+      expect.objectContaining({ maxIdleTime: 1234 })
+    ]);
+  });
+
   it('reconnects when the watcher connection closes', async () => {
     vi.useFakeTimers();
 
